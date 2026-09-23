@@ -1,4 +1,4 @@
-const IMAGE_BUCKET = "PQ15J63mEi4dPkGu5hqvzA";
+export const IMAGE_BUCKET = "PQ15J63mEi4dPkGu5hqvzA";
 
 const TTL = "604800";
 

@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { readChainMarkets } from "./chain-markets";
 import { PAIRS } from "./pairs";
-import { shareTokenImage } from "./share-image";
+import { readSharedImage, shareTokenImage } from "./share-image";
 import { advanceTime, asAddress, clone, emptyState, fundSimulator } from "./protocol";
 import type { ActionResult, Market, ProtocolState } from "./types";
 
@@ -183,16 +183,15 @@ export function YeeldProvider({ children }: { children: React.ReactNode }) {
         continue;
       }
       if (market.image) continue;
-      void fetch(`/api/image?address=${market.address}`, { cache: "no-store" })
-        .then((response) => (response.ok ? response.json() : null))
-        .then((body: { image?: string | null } | null) => {
-          if (stop || !body?.image) return;
+      void readSharedImage(market.address)
+        .then((image) => {
+          if (stop || !image) return;
           setState((current) => {
             const match = current.markets.find((item) => item.address === market.address);
             if (!match || match.image) return current;
             return {
               ...current,
-              markets: current.markets.map((item) => (item.address === market.address ? { ...item, image: body.image! } : item)),
+              markets: current.markets.map((item) => (item.address === market.address ? { ...item, image } : item)),
             };
           });
         })

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { putTokenImage, readTokenImage } from "@/lib/token-image";
+import { IMAGE_BUCKET, putTokenImage, readTokenImage } from "@/lib/token-image";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -8,7 +8,31 @@ export const fetchCache = "force-no-store";
 const headers = { "cache-control": "no-store" };
 
 export async function GET(request: Request) {
-  const address = new URL(request.url).searchParams.get("address") ?? "";
+  const url = new URL(request.url);
+  if (url.searchParams.get("probe") === "1") {
+    const payload = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+    const key = `${IMAGE_BUCKET}/probe`;
+    let postStatus = 0;
+    let postBody = "";
+    let getStatus = 0;
+    let getBody = "";
+    try {
+      const post = await fetch(`https://kvdb.io/${key}?ttl=600`, { method: "POST", cache: "no-store", body: payload });
+      postStatus = post.status;
+      postBody = (await post.text()).slice(0, 180);
+    } catch (error) {
+      postBody = error instanceof Error ? error.message : "post failed";
+    }
+    try {
+      const get = await fetch(`https://kvdb.io/${key}`, { cache: "no-store" });
+      getStatus = get.status;
+      getBody = (await get.text()).slice(0, 120);
+    } catch (error) {
+      getBody = error instanceof Error ? error.message : "get failed";
+    }
+    return NextResponse.json({ postStatus, postBody, getStatus, getBody }, { headers });
+  }
+  const address = url.searchParams.get("address") ?? "";
   try {
     const image = await readTokenImage(address);
     return NextResponse.json({ image }, { headers });
