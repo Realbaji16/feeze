@@ -30,7 +30,11 @@ export async function GET(request: Request) {
     );
   }
   try {
-    const markets = await readChainMarkets(extra.split(",").filter(Boolean));
+    const curves = url.searchParams.get("curves") ?? "";
+    const markets = await readChainMarkets(
+      extra.split(",").filter(Boolean),
+      curves.split(",").filter(Boolean),
+    );
     const withImages = await Promise.all(
       markets.map(async (market) => {
         if (market.image) return market;

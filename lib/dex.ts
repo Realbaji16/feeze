@@ -40,7 +40,12 @@ export function listedMarket(input: {
   quote?: DexQuote;
   statsMcap: number;
   statsProgress: number;
+  /** Raised-ETH progress for a live bonding curve, before a pool exists. */
+  curve?: boolean;
 }) {
+  if (input.curve) {
+    return { mcap: input.statsMcap, graduated: false, progress: input.statsProgress, phase: "curve" as Phase };
+  }
   const mcap = input.quote?.marketCap ?? input.statsMcap;
   const graduated = input.onchain ? mcap >= GRADUATION_MARKET_CAP_USD : input.phase === "graduated";
   const progress = input.onchain ? Math.min(1, mcap / GRADUATION_MARKET_CAP_USD) : input.statsProgress;

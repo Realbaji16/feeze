@@ -57,8 +57,10 @@ export interface Market {
   volumeQuote: number;
   /** Deployed on Robinhood Chain. Trades for this market are chain transactions. */
   onchain?: boolean;
-  /** Uniswap v3 pool, when launch locked liquidity. */
+  /** Uniswap v3 pool, when the curve has graduated or launch locked liquidity. */
   poolAddress?: string;
+  /** Bonding curve that holds the supply until graduation. */
+  curveAddress?: string;
 }
 
 export interface LockPosition {

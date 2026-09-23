@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { formatEther, type Address } from "viem";
+import { formatEther, parseEther, zeroAddress, type Address } from "viem";
 import { useYeeld } from "@/lib/store";
 import { compact, formatDate, shortAddr, timeAgo, usd } from "@/lib/format";
 import {
@@ -16,6 +16,7 @@ import {
   positionRewards,
   quoteTrade,
   sweepOrphan,
+  syncCurve,
   trade,
   GRACE_MS,
 } from "@/lib/protocol";
@@ -23,7 +24,8 @@ import type { ChainHolder, ChainTrade } from "@/lib/chain-activity";
 import { PhasePill, Progress, TokenMark, marketStats } from "@/components/bits";
 import { dexChartUrl, listedMarket, readDexPool, type DexQuote } from "@/lib/dex";
 import { GRADUATION_MARKET_CAP_USD, PONS_GRADUATION_ETH } from "@/lib/protocol";
-import { dexScreener, explainTx, quoteSwap, readHoldings, readUniswapPool, swapOnRobinhood, tokenExplorer, txExplorer } from "@/lib/robinhood-market";
+import { dexScreener, explainTx, quoteSwap, readCurveState, readCurveTrades, readHoldings, readUniswapPool, swapOnRobinhood, tokenExplorer, tradeOnCurve, txExplorer } from "@/lib/robinhood-market";
+import { quoteCurveBuy, quoteCurveSell } from "@/lib/curve-math";
 
 export default function CoinPage() {
   const params = useParams<{ address: string }>();
@@ -66,7 +68,28 @@ export default function CoinPage() {
   }, [market?.onchain, wallet, market?.address, chainBusy]);
 
   useEffect(() => {
-    if (!market?.onchain || !market.poolAddress || !(numeric > 0)) {
+    if (!market?.onchain || !(numeric > 0)) {
+      setChainOut(null);
+      return;
+    }
+    if (market.curveAddress && !market.poolAddress) {
+      try {
+        const raw = parseEther(amount);
+        const realQuote = parseEther(market.realQuote.toFixed(18));
+        const tokenReserve = parseEther((market.realTokens || 1_000_000_000).toFixed(18));
+        const tax = BigInt(market.creatorTaxBps);
+        const quoted =
+          side === "buy"
+            ? quoteCurveBuy({ quoteIn: raw, realQuote, tokenReserve, creatorTaxBps: tax })
+            : quoteCurveSell({ tokensIn: raw, realQuote, tokenReserve, creatorTaxBps: tax });
+        const out = "tokensOut" in quoted ? quoted.tokensOut : quoted.quoteOut;
+        setChainOut(formatEther(out));
+      } catch {
+        setChainOut(null);
+      }
+      return;
+    }
+    if (!market.poolAddress) {
       setChainOut(null);
       return;
     }
@@ -81,7 +104,7 @@ export default function CoinPage() {
     return () => {
       stop = true;
     };
-  }, [market?.onchain, market?.poolAddress, market?.address, side, amount, numeric]);
+  }, [market?.onchain, market?.poolAddress, market?.curveAddress, market?.address, market?.realQuote, market?.realTokens, market?.creatorTaxBps, side, amount, numeric]);
 
   const stateRef = useRef(state);
   const commitRef = useRef(commit);
@@ -124,7 +147,41 @@ export default function CoinPage() {
   }, [market?.poolAddress]);
 
   useEffect(() => {
-    if (!market?.onchain) return;
+    if (!market?.curveAddress) return;
+    let stop = false;
+    const load = () => {
+      readCurveState(market.curveAddress as Address)
+        .then((chain) => {
+          if (stop) return;
+          const realQuote = Number(formatEther(chain.realQuote));
+          const realTokens = Number(formatEther(chain.tokenReserve));
+          const pool = chain.graduated && chain.pool !== zeroAddress ? chain.pool : null;
+          const current = stateRef.current.markets.find((item) => item.address === market.address);
+          const changed =
+            !current ||
+            Math.abs(current.realQuote - realQuote) > 1e-12 ||
+            Math.abs(current.realTokens - realTokens) > 1e-6 ||
+            Boolean(pool && !current.poolAddress);
+          if (!changed) return;
+          commitRef.current(syncCurve(stateRef.current, market.address, { realQuote, realTokens, pool }));
+        })
+        .catch(() => undefined);
+      readCurveTrades(market.curveAddress as Address)
+        .then((rows) => {
+          if (!stop) setChainTrades(rows);
+        })
+        .catch(() => undefined);
+    };
+    load();
+    const id = window.setInterval(load, 15_000);
+    return () => {
+      stop = true;
+      window.clearInterval(id);
+    };
+  }, [market?.curveAddress, market?.address]);
+
+  useEffect(() => {
+    if (!market?.onchain || (market.curveAddress && !market.poolAddress)) return;
     let stop = false;
     const load = () => {
       const pool = market.poolAddress ?? "";
@@ -167,6 +224,7 @@ export default function CoinPage() {
     quote: dex ?? undefined,
     statsMcap: stats.mcap,
     statsProgress: stats.progress,
+    curve: Boolean(market.curveAddress && !market.poolAddress),
   });
   const candles = buildCandles(market.trades);
   const simHolders = holdersOf(state, market.address);
@@ -182,13 +240,21 @@ export default function CoinPage() {
     setChainBusy(true);
     setChainNote(null);
     try {
-      const hash = await swapOnRobinhood({
-        token: market.address as Address,
-        side,
-        amount,
-        slippageBps: slippage,
-        onStatus: setChainNote,
-      });
+      const hash = market.curveAddress && !market.poolAddress
+        ? await tradeOnCurve({
+            curve: market.curveAddress as Address,
+            side,
+            amount,
+            slippageBps: slippage,
+            onStatus: setChainNote,
+          })
+        : await swapOnRobinhood({
+            token: market.address as Address,
+            side,
+            amount,
+            slippageBps: slippage,
+            onStatus: setChainNote,
+          });
       setChainNote(`Swap confirmed. ${hash}`);
     } catch (error) {
       setChainNote(explainTx(error));
@@ -222,19 +288,19 @@ export default function CoinPage() {
       </div>
       {market.description && <p className="sub">{market.description}</p>}
       <div className="grid-3">
-        <div className="stat"><span>Price</span><b>{dex ? usd(dex.priceUsd) : onchain && market.poolAddress ? usd(stats.price * stats.pair.usd) : onchain ? "—" : `${compact(stats.price, 6)} ${stats.pair.symbol}`}</b></div>
-        <div className="stat"><span>Market cap</span><b>{onchain && !market.poolAddress ? "—" : usd(listed.mcap)}</b></div>
+        <div className="stat"><span>Price</span><b>{dex ? usd(dex.priceUsd) : onchain && (market.poolAddress || market.curveAddress) ? usd(stats.price * stats.pair.usd) : onchain ? "—" : `${compact(stats.price, 6)} ${stats.pair.symbol}`}</b></div>
+        <div className="stat"><span>Market cap</span><b>{onchain && !market.poolAddress && !market.curveAddress ? "—" : usd(listed.mcap)}</b></div>
         <div className="stat"><span>Volume</span><b>{usd(dex ? dex.volume24h : market.volumeQuote * stats.pair.usd)}</b></div>
       </div>
       <div className="grid-2">
         <div className="stack">
           <div className="card">
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-              <strong>{onchain ? "DexScreener" : listed.phase === "graduated" ? "v4 pool" : "Bonding curve"}</strong>
+              <strong>{market.poolAddress ? "DexScreener" : market.curveAddress || !onchain ? "Bonding curve" : "DexScreener"}</strong>
               <span className="mono faint">
                 {listed.graduated
                   ? "Graduated"
-                  : onchain && market.poolAddress
+                  : onchain && (market.poolAddress || market.curveAddress)
                     ? `${Math.round(listed.progress * 100)}% to ${PONS_GRADUATION_ETH} ETH · ${usd(GRADUATION_MARKET_CAP_USD)}`
                     : onchain
                       ? "No pool yet"
@@ -244,8 +310,10 @@ export default function CoinPage() {
             <Progress value={listed.progress} graduated={listed.graduated} />
             {market.poolAddress ? (
               <iframe className="dex-frame" title={`${market.symbol} chart`} src={dexChartUrl(market.poolAddress)} />
+            ) : market.curveAddress ? (
+              <CandleChart candles={buildCandles(chainTrades.flatMap((row) => (row.quoteAmount && row.tokenAmount ? [{ time: row.time, price: row.quoteAmount / row.tokenAmount }] : [])))} />
             ) : onchain ? (
-              <div className="chart note">This launch did not lock ETH, so there is no Uniswap pool for DexScreener to chart.</div>
+              <div className="chart note">This launch did not open a curve or a pool.</div>
             ) : (
               <CandleChart candles={candles} />
             )}
@@ -356,8 +424,9 @@ export default function CoinPage() {
               {onchain ? (
                 <>
                   <div><span>You receive</span><b className="mono">{chainOut ? `${compact(Number(chainOut), 4)} ${side === "buy" ? market.symbol : "ETH"}` : "—"}</b></div>
-                  <div><span>Pool fee</span><span>Uniswap 1%</span></div>
-                  {!market.poolAddress && <div className="note">No Uniswap pool yet, so this token is not listed on DexScreener.</div>}
+                  <div><span>Fee</span><span>{market.curveAddress && !market.poolAddress ? "1% plus creator tax, paid in ETH" : "Uniswap 1%"}</span></div>
+                  {market.curveAddress && !market.poolAddress && <div className="note">Trades go to the bonding curve. The Uniswap pool opens once 4.2 ETH has been raised.</div>}
+                  {!market.poolAddress && !market.curveAddress && <div className="note">No Uniswap pool yet, so this token is not listed on DexScreener.</div>}
                   {chainNote && <div className="note">{chainNote}</div>}
                 </>
               ) : quote && !("error" in quote) ? (
@@ -376,7 +445,7 @@ export default function CoinPage() {
             <button
               className="btn-accent"
               style={{ width: "100%", justifyContent: "center", marginTop: 12 }}
-              disabled={!wallet || chainBusy || (onchain ? !market.poolAddress || !(numeric > 0) : !quote || "error" in (quote ?? {}))}
+              disabled={!wallet || chainBusy || (onchain ? !(market.poolAddress || market.curveAddress) || !(numeric > 0) : !quote || "error" in (quote ?? {}))}
               onClick={() => void submit()}
             >
               {wallet ? (chainBusy ? "Confirm in wallet…" : side === "buy" ? "Buy" : "Sell") : "Connect to trade"}

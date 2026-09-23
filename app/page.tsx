@@ -56,6 +56,7 @@ export default function MarketsPage() {
             quote: quotes[market.address],
             statsMcap: stats.mcap,
             statsProgress: stats.progress,
+            curve: Boolean(market.curveAddress && !market.poolAddress),
           }).phase
         : market.phase;
       if (graduated === "live" && phase === "graduated") return false;
@@ -85,12 +86,13 @@ export default function MarketsPage() {
   const graduatedCount = state.markets.filter((market) => {
     const stats = marketStats(market);
     if (!stats) return market.phase === "graduated";
-    return listedMarket({
+      return listedMarket({
       onchain: Boolean(market.onchain),
       phase: market.phase,
       quote: quotes[market.address],
       statsMcap: stats.mcap,
       statsProgress: stats.progress,
+      curve: Boolean(market.curveAddress && !market.poolAddress),
     }).graduated;
   }).length;
 
@@ -146,6 +148,7 @@ export default function MarketsPage() {
             quote: quotes[market.address],
             statsMcap: stats.mcap,
             statsProgress: stats.progress,
+            curve: Boolean(market.curveAddress && !market.poolAddress),
           });
           const live = quotes[market.address];
           return (

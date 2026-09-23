@@ -1,4 +1,4 @@
-import { createPublicClient, erc20Abi, http, keccak256, parseAbiItem, toBytes, type Address } from "viem";
+import { createPublicClient, erc20Abi, formatEther, http, keccak256, parseAbiItem, toBytes, type Address } from "viem";
 import { robinhood } from "./chain";
 import { emptyState, launch } from "./protocol";
 import { PAIRS } from "./pairs";
@@ -151,8 +151,83 @@ async function tokenMeta(token: string): Promise<{ name: string; symbol: string 
   return { name, symbol };
 }
 
+async function readCurveMarkets(factories: string[]): Promise<Market[]> {
+  const client = rpc();
+  const event = parseAbiItem("event Launched(address indexed token, address indexed curve, address indexed creator)");
+  const markets: Market[] = [];
+  const seen = new Set<string>();
+  for (const factory of factories) {
+    const latest = await client.getBlockNumber();
+    const span = 49_999n;
+    const start = latest > 500_000n ? latest - 500_000n : 0n;
+    for (let from = start; from <= latest; from += span) {
+      const to = from + span - 1n > latest ? latest : from + span - 1n;
+      const logs = await client.getLogs({ address: factory as Address, event, fromBlock: from, toBlock: to });
+      for (const log of logs) {
+        const token = cleanAddress(log.args.token ?? "");
+        const curve = cleanAddress(log.args.curve ?? "");
+        const creator = cleanAddress(log.args.creator ?? "");
+        if (!token || !curve || !creator || seen.has(token)) continue;
+        seen.add(token);
+        let name = "Token";
+        let symbol = "TOKEN";
+        try {
+          const meta = await tokenMeta(token);
+          name = meta.name;
+          symbol = meta.symbol;
+        } catch {
+          // Keep the placeholder if metadata cannot be read.
+        }
+        let curveTokens = 1_000_000_000;
+        let curveQuote = 0;
+        let pool: string | undefined;
+        try {
+          const curveAbi = [
+            { type: "function", name: "realQuote", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
+            { type: "function", name: "tokenReserve", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
+            { type: "function", name: "pool", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
+            { type: "function", name: "graduated", stateMutability: "view", inputs: [], outputs: [{ type: "bool" }] },
+          ] as const;
+          const [quote, tokens, poolAddr, graduated] = await Promise.all([
+            client.readContract({ address: curve as Address, abi: curveAbi, functionName: "realQuote" }),
+            client.readContract({ address: curve as Address, abi: curveAbi, functionName: "tokenReserve" }),
+            client.readContract({ address: curve as Address, abi: curveAbi, functionName: "pool" }),
+            client.readContract({ address: curve as Address, abi: curveAbi, functionName: "graduated" }),
+          ]);
+          curveQuote = Number(formatEther(quote));
+          curveTokens = Number(formatEther(tokens));
+          if (graduated && poolAddr !== "0x0000000000000000000000000000000000000000") pool = poolAddr.toLowerCase();
+        } catch {
+          // The launch event is enough to list the market at the opening price.
+        }
+        const block = await client.getBlock({ blockNumber: log.blockNumber });
+        const draft = emptyState();
+        draft.now = Number(block.timestamp) * 1000;
+        const created = launch(draft, {
+          creator,
+          name,
+          symbol,
+          description: "",
+          pair: ETH_PAIR,
+          creatorTaxBps: 0,
+          taxToLockers: false,
+          onchain: true,
+          chainAddress: token,
+          chainTx: log.transactionHash,
+          curveAddress: curve,
+          curveTokens: curveTokens > 0 ? curveTokens : undefined,
+          curveQuote,
+          poolAddress: pool,
+        });
+        if (created.ok) markets.push(created.value);
+      }
+    }
+  }
+  return markets;
+}
+
 /** Pooled Feeze launches, including ones this browser no longer has in local storage. */
-export async function readChainMarkets(extra: string[] = []): Promise<Market[]> {
+export async function readChainMarkets(extra: string[] = [], curves: string[] = []): Promise<Market[]> {
   const launchers = [
     ...new Set(
       [CANONICAL_LAUNCHER, ...extra]
@@ -205,6 +280,15 @@ export async function readChainMarkets(extra: string[] = []): Promise<Market[]> 
       });
       if (created.ok) markets.push(created.value);
     }
+  }
+  const curveFactories = curves
+    .map((item) => cleanAddress(item))
+    .filter((item): item is string => item !== null && !RETIRED_LAUNCHERS.has(item));
+  const curved = curveFactories.length ? await readCurveMarkets(curveFactories) : [];
+  for (const market of curved) {
+    if (seen.has(market.address)) continue;
+    seen.add(market.address);
+    markets.push(market);
   }
   return markets.sort((a, b) => b.launchedAt - a.launchedAt);
 }

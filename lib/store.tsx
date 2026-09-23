@@ -35,7 +35,10 @@ const RETIRED_MARKETS = new Set([
 /** Demo coins live only in the simulator. A tradeable launch has a Robinhood pool. */
 function keepTradeable(state: ProtocolState): ProtocolState {
   const markets = (state.markets ?? []).filter(
-    (market) => market.onchain && market.poolAddress && !RETIRED_MARKETS.has(market.address.toLowerCase()),
+    (market) =>
+      market.onchain &&
+      (market.poolAddress || market.curveAddress) &&
+      !RETIRED_MARKETS.has(market.address.toLowerCase()),
   );
   const keep = new Set(markets.map((market) => market.address));
   const removed = markets.length !== (state.markets ?? []).length;
@@ -65,11 +68,9 @@ function keepTradeable(state: ProtocolState): ProtocolState {
   };
 }
 
-function savedLaunchers(): string[] {
+function savedAddresses(keys: string[]): string[] {
   if (typeof localStorage === "undefined") return [];
-  return ["feeze.launcher.v1", "feeze.launcher.v2", "feeze.launcher.v3"]
-    .map((key) => localStorage.getItem(key) ?? "")
-    .filter((value) => /^0x[0-9a-fA-F]{40}$/.test(value));
+  return keys.map((key) => localStorage.getItem(key) ?? "").filter((value) => /^0x[0-9a-fA-F]{40}$/.test(value));
 }
 
 function mergeChainMarkets(state: ProtocolState, incoming: Market[]): ProtocolState {
@@ -80,8 +81,30 @@ function mergeChainMarkets(state: ProtocolState, incoming: Market[]): ProtocolSt
     if (RETIRED_MARKETS.has(market.address.toLowerCase())) continue;
     const existing = byAddress.get(market.address);
     if (existing) {
+      const next = { ...existing };
+      let changed = false;
       if (!existing.image && market.image) {
-        byAddress.set(market.address, { ...existing, image: market.image });
+        next.image = market.image;
+        changed = true;
+      }
+      if (market.curveAddress && existing.curveAddress !== market.curveAddress) {
+        next.curveAddress = market.curveAddress;
+        changed = true;
+      }
+      if (existing.curveAddress && (existing.realQuote !== market.realQuote || existing.realTokens !== market.realTokens)) {
+        next.realQuote = market.realQuote;
+        next.realTokens = market.realTokens;
+        changed = true;
+      }
+      if (!existing.poolAddress && market.poolAddress) {
+        next.poolAddress = market.poolAddress;
+        next.phase = "graduated";
+        next.poolTokens = market.poolTokens;
+        next.poolQuote = market.poolQuote;
+        changed = true;
+      }
+      if (changed) {
+        byAddress.set(market.address, next);
         added = true;
       }
       continue;
@@ -151,22 +174,23 @@ export function YeeldProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!ready) return;
     let stop = false;
-    const extra = savedLaunchers();
+    const extra = savedAddresses(["feeze.launcher.v1", "feeze.launcher.v2", "feeze.launcher.v3"]);
+    const curves = savedAddresses(["feeze.curve.v1"]);
     const apply = (markets: Market[]) => {
       if (stop || !markets.length) return;
       setState((current) => mergeChainMarkets(current, markets));
     };
-    fetch(`/api/launches?launchers=${extra.join(",")}`, { cache: "no-store" })
+    fetch(`/api/launches?launchers=${extra.join(",")}&curves=${curves.join(",")}`, { cache: "no-store" })
       .then((response) => (response.ok ? response.json() : []))
       .then((markets: Market[]) => {
         if (Array.isArray(markets) && markets.length) {
           apply(markets);
           return;
         }
-        return readChainMarkets(extra).then(apply);
+        return readChainMarkets(extra, curves).then(apply);
       })
       .catch(() => {
-        readChainMarkets(extra).then(apply).catch(() => undefined);
+        readChainMarkets(extra, curves).then(apply).catch(() => undefined);
       });
     return () => {
       stop = true;

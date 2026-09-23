@@ -468,6 +468,9 @@ export interface LaunchInput {
   chainTx?: string;
   onchain?: boolean;
   poolAddress?: string;
+  curveAddress?: string;
+  curveTokens?: number;
+  curveQuote?: number;
 }
 
 export function previewAddress(input: Pick<LaunchInput, "creator" | "symbol" | "pair" | "name">, nonce: number): string {
@@ -506,6 +509,7 @@ export function launch(state: ProtocolState, input: LaunchInput): ActionResult<M
     phase: "curve",
     onchain: input.onchain,
     poolAddress: input.poolAddress,
+    curveAddress: input.curveAddress ? asAddress(input.curveAddress) : undefined,
     realTokens: CURVE_TOKENS,
     realQuote: 0,
     virtualOffset: CURVE_TOKENS / 10,
@@ -527,8 +531,18 @@ export function launch(state: ProtocolState, input: LaunchInput): ActionResult<M
   };
     next.markets.unshift(market);
   pushActivity(next, `${symbol} launched against ${pair.symbol}`, `/coin/${address}`);
+  if (input.curveAddress) {
+    market.realTokens = input.curveTokens ?? TOTAL_SUPPLY;
+    market.realQuote = input.curveQuote ?? 0;
+    market.virtualOffset = 0;
+  }
   if (input.onchain) {
-    if (input.poolAddress && pair.usd > 0) {
+    if (input.poolAddress && input.curveAddress) {
+      market.phase = "graduated";
+      market.poolTokens = TOTAL_SUPPLY;
+      market.poolQuote = GRADUATION_FDV_ETH;
+      market.graduatedAt = next.now;
+    } else if (input.poolAddress && pair.usd > 0) {
       market.poolTokens = TOTAL_SUPPLY;
       market.poolQuote = START_MARKET_CAP_USD / pair.usd;
     }
@@ -544,6 +558,27 @@ export function launch(state: ProtocolState, input: LaunchInput): ActionResult<M
     });
     if (!bought.ok) return { ok: false, error: `Launch reverted: ${bought.error}` };
     return { ok: true, state: bought.state, value: findMarket(bought.state, address)! };
+  }
+  return { ok: true, state: next, value: market };
+}
+
+export function syncCurve(
+  state: ProtocolState,
+  address: string,
+  patch: { realQuote: number; realTokens: number; pool?: string | null },
+): ActionResult<Market> {
+  const next = clone(state);
+  const market = findMarket(next, address);
+  if (!market) return { ok: false, error: "Market not found" };
+  market.realQuote = patch.realQuote;
+  market.realTokens = patch.realTokens;
+  market.virtualOffset = 0;
+  if (patch.pool && !market.poolAddress) {
+    market.poolAddress = patch.pool.toLowerCase();
+    market.phase = "graduated";
+    market.poolTokens = TOTAL_SUPPLY;
+    market.poolQuote = GRADUATION_FDV_ETH;
+    market.graduatedAt = market.graduatedAt ?? next.now;
   }
   return { ok: true, state: next, value: market };
 }

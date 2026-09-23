@@ -18,6 +18,9 @@ import {
 } from "viem";
 import { CANONICAL_LAUNCHER } from "./chain-markets";
 import { robinhood } from "./chain";
+import type { ChainTrade } from "./chain-activity";
+import { quoteCurveBuy, quoteCurveSell } from "./curve-math";
+import { FEEZE_CURVE_ABI, FEEZE_CURVE_FACTORY_BYTECODE } from "./feeze-curve";
 import { FEEZE_LAUNCHER_ABI, FEEZE_LAUNCHER_BYTECODE } from "./feeze-launcher";
 
 export const WETH = getAddress("0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73");
@@ -424,4 +427,211 @@ export async function swapOnRobinhood(input: {
     client,
   );
   return sold.transactionHash;
+}
+
+const CURVE_KEY = "feeze.curve.v1";
+
+async function ensureCurveFactory(
+  wallet: Awaited<ReturnType<typeof signer>>["wallet"],
+  account: Address,
+  client: ReturnType<typeof publicClient>,
+  onStatus: (message: string) => void,
+): Promise<Address> {
+  const saved = typeof localStorage === "undefined" ? null : localStorage.getItem(CURVE_KEY);
+  if (saved && isAddress(saved)) {
+    const code = await client.getBytecode({ address: saved });
+    if (code && code !== "0x") return saved;
+  }
+  onStatus("First launch installs the curve. Confirm this once, then the token.");
+  const deployed = await send(
+    () =>
+      wallet.deployContract({
+        abi: FEEZE_CURVE_ABI,
+        bytecode: FEEZE_CURVE_FACTORY_BYTECODE,
+        account,
+        chain: robinhood,
+        args: [],
+      }),
+    client,
+  );
+  const factory = deployed.contractAddress;
+  if (!factory) throw new Error("The curve deploy did not return a contract address.");
+  localStorage.setItem(CURVE_KEY, factory);
+  return factory;
+}
+
+export async function deployFeezeCurve(input: {
+  name: string;
+  symbol: string;
+  creatorTaxBps: number;
+  onStatus: (message: string) => void;
+}): Promise<{ token: Address; curve: Address; tx: Hex }> {
+  const { wallet, account, client } = await signer();
+  const factory = await ensureCurveFactory(wallet, account, client, input.onStatus);
+  input.onStatus("Confirm the launch. It costs gas only. The supply stays on the curve.");
+  const launched = await send(
+    () =>
+      wallet.writeContract({
+        address: factory,
+        abi: FEEZE_CURVE_ABI,
+        functionName: "launch",
+        args: [input.name, input.symbol, BigInt(input.creatorTaxBps)],
+        account,
+        chain: robinhood,
+      }),
+    client,
+  );
+  for (const log of launched.logs) {
+    try {
+      const decoded = decodeEventLog({ abi: FEEZE_CURVE_ABI, data: log.data, topics: log.topics });
+      if (decoded.eventName !== "Launched") continue;
+      return { token: decoded.args.token, curve: decoded.args.curve, tx: launched.transactionHash };
+    } catch {
+      // Token and curve logs share this receipt.
+    }
+  }
+  throw new Error("The launch transaction did not return a token address.");
+}
+
+export async function readCurveState(curve: Address): Promise<{
+  realQuote: bigint;
+  tokenReserve: bigint;
+  pool: Address;
+  graduated: boolean;
+  creatorTaxBps: bigint;
+  token: Address;
+}> {
+  const client = publicClient();
+  const [realQuote, tokenReserve, pool, graduated, creatorTaxBps, token] = await Promise.all([
+    client.readContract({ address: curve, abi: FEEZE_CURVE_ABI, functionName: "realQuote" }),
+    client.readContract({ address: curve, abi: FEEZE_CURVE_ABI, functionName: "tokenReserve" }),
+    client.readContract({ address: curve, abi: FEEZE_CURVE_ABI, functionName: "pool" }),
+    client.readContract({ address: curve, abi: FEEZE_CURVE_ABI, functionName: "graduated" }),
+    client.readContract({ address: curve, abi: FEEZE_CURVE_ABI, functionName: "creatorTaxBps" }),
+    client.readContract({ address: curve, abi: FEEZE_CURVE_ABI, functionName: "token" }),
+  ]);
+  return { realQuote, tokenReserve, pool, graduated, creatorTaxBps, token };
+}
+
+export async function tradeOnCurve(input: {
+  curve: Address;
+  side: "buy" | "sell";
+  amount: string;
+  slippageBps: number;
+  onStatus: (message: string) => void;
+}): Promise<Hex> {
+  const { wallet, account, client } = await signer();
+  const amountIn = parseEther(input.amount);
+  const state = await readCurveState(input.curve);
+  const slip = BigInt(Math.max(0, Math.min(10_000, input.slippageBps)));
+  if (input.side === "buy") {
+    const quoted = quoteCurveBuy({
+      quoteIn: amountIn,
+      realQuote: state.realQuote,
+      tokenReserve: state.tokenReserve,
+      creatorTaxBps: state.creatorTaxBps,
+    });
+    if (quoted.tokensOut <= 0n) throw new Error("That buy does not clear the curve.");
+    const minOut = (quoted.tokensOut * (10_000n - slip)) / 10_000n;
+    input.onStatus("Confirm the buy.");
+    const bought = await send(
+      () =>
+        wallet.writeContract({
+          address: input.curve,
+          abi: FEEZE_CURVE_ABI,
+          functionName: "buy",
+          args: [minOut],
+          value: amountIn,
+          account,
+          chain: robinhood,
+        }),
+      client,
+    );
+    return bought.transactionHash;
+  }
+  const quoted = quoteCurveSell({
+    tokensIn: amountIn,
+    realQuote: state.realQuote,
+    tokenReserve: state.tokenReserve,
+    creatorTaxBps: state.creatorTaxBps,
+  });
+  if (quoted.quoteOut <= 0n) throw new Error("The curve cannot buy that many tokens back.");
+  const minOut = (quoted.quoteOut * (10_000n - slip)) / 10_000n;
+  const allowance = await client.readContract({
+    address: state.token,
+    abi: erc20Abi,
+    functionName: "allowance",
+    args: [account, input.curve],
+  });
+  if (allowance < amountIn) {
+    input.onStatus("Confirm the token approval, then the sell.");
+    await send(
+      () =>
+        wallet.writeContract({
+          address: state.token,
+          abi: erc20Abi,
+          functionName: "approve",
+          args: [input.curve, amountIn],
+          account,
+          chain: robinhood,
+        }),
+      client,
+    );
+  }
+  input.onStatus("Confirm the sell.");
+  const sold = await send(
+    () =>
+      wallet.writeContract({
+        address: input.curve,
+        abi: FEEZE_CURVE_ABI,
+        functionName: "sell",
+        args: [amountIn, minOut],
+        account,
+        chain: robinhood,
+      }),
+    client,
+  );
+  return sold.transactionHash;
+}
+
+export async function readCurveTrades(curve: Address): Promise<ChainTrade[]> {
+  const client = publicClient();
+  const latest = await client.getBlockNumber();
+  const span = 49_999n;
+  const start = latest > 500_000n ? latest - 500_000n : 0n;
+  const logs = [];
+  for (let from = start; from <= latest; from += span) {
+    const to = from + span - 1n > latest ? latest : from + span - 1n;
+    logs.push(...(await client.getLogs({ address: curve, fromBlock: from, toBlock: to })));
+  }
+  const rows: ChainTrade[] = [];
+  for (const log of logs) {
+    try {
+      const decoded = decodeEventLog({ abi: FEEZE_CURVE_ABI, data: log.data, topics: log.topics });
+      if (decoded.eventName !== "CurveBuy" && decoded.eventName !== "CurveSell") continue;
+      const buy = decoded.eventName === "CurveBuy";
+      const tokenAmount = Number(formatEther(buy ? decoded.args.tokensOut : decoded.args.tokensIn));
+      const quoteAmount = Number(formatEther(buy ? decoded.args.quoteIn : decoded.args.quoteOut));
+      rows.push({
+        hash: log.transactionHash ?? "",
+        side: buy ? "buy" : "sell",
+        tokenAmount,
+        quoteAmount,
+        trader: (buy ? decoded.args.buyer : decoded.args.seller).toLowerCase(),
+        time: Number(log.blockNumber),
+      });
+    } catch {
+      // Pool and token logs are on other addresses.
+    }
+  }
+  const stamps = new Map<bigint, number>();
+  await Promise.all(
+    [...new Set(rows.map((row) => BigInt(row.time)))].map(async (blockNumber) => {
+      const block = await client.getBlock({ blockNumber });
+      stamps.set(blockNumber, Number(block.timestamp) * 1000);
+    }),
+  );
+  return rows
+    .map((row) => ({ ...row, time: stamps.get(BigInt(row.time)) ?? Date.now() }))
+    .sort((a, b) => b.time - a.time);
 }
