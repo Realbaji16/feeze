@@ -340,12 +340,9 @@ export async function deployRobinhoodToken(input: {
 }): Promise<{ token: Address; tx: Hex; pool: Address | null }> {
   const { wallet, account, client } = await signer();
   const liquidity = input.liquidityEth.trim() ? parseEther(input.liquidityEth.trim()) : 0n;
+  if (liquidity <= 0n) throw new Error("Add ETH liquidity so Uniswap and trading bots can buy the token.");
   const launcher = await ensureLauncher(wallet, account, client, input.onStatus);
-  input.onStatus(
-    liquidity > 0n
-      ? "Confirm the launch. This deploys the token and locks the Uniswap pool."
-      : "Confirm the launch. This deploys the token.",
-  );
+  input.onStatus("Confirm the launch. This deploys the token and locks the Uniswap pool.");
   const launched = await send(
     () =>
       writeRobinhood(wallet, account, client, {
@@ -358,6 +355,7 @@ export async function deployRobinhoodToken(input: {
     client,
   );
   const result = launchedFrom(launched);
+  if (!result.pool) throw new Error("The Uniswap pool did not open. Add more ETH liquidity and try again.");
   return { token: result.token, tx: launched.transactionHash, pool: result.pool };
 }
 

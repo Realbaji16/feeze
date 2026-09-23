@@ -10,7 +10,7 @@ import { bindTokenImage, uploadImageBlob } from "@/lib/share-image";
 import { compact, usd } from "@/lib/format";
 import { launch, PONS_PHANTOM_ETH, START_MARKET_CAP_USD } from "@/lib/protocol";
 import { robinhood } from "@/lib/chain";
-import { deployFeezeCurve, explainTx, isWethPair } from "@/lib/robinhood-market";
+import { deployRobinhoodToken, explainTx, isWethPair } from "@/lib/robinhood-market";
 
 export default function LaunchPage() {
   const { state, commit } = useYeeld();
@@ -24,6 +24,7 @@ export default function LaunchPage() {
   const [pair, setPair] = useState(PAIRS[0].address);
   const [tax, setTax] = useState(0);
   const [toLockers, setToLockers] = useState(false);
+  const [liquidity, setLiquidity] = useState("0.01");
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [ethBalance, setEthBalance] = useState<number | null>(null);
@@ -119,7 +120,12 @@ export default function LaunchPage() {
       return;
     }
     if (!ethPair) {
-      setStatus("The curve trades in ETH. Pick ETH as the pair.");
+      setStatus("Launches pair with ETH. Pick ETH as the pair.");
+      return;
+    }
+    const liquidityEth = liquidity.trim();
+    if (!liquidityEth || !(Number(liquidityEth) > 0)) {
+      setStatus("Add ETH liquidity so Uniswap, DexScreener, and trading bots can buy the token right away.");
       return;
     }
     setBusy(true);
@@ -134,12 +140,16 @@ export default function LaunchPage() {
         setStatus("The image did not finish uploading to ipfs.");
         return;
       }
-      const deployed = await deployFeezeCurve({
+      const deployed = await deployRobinhoodToken({
         name: cleanName,
         symbol: cleanSymbol,
-        creatorTaxBps: Math.round(taxPct * 100),
+        liquidityEth,
         onStatus: setStatus,
       });
+      if (!deployed.pool) {
+        setStatus("The Uniswap pool did not open. Add ETH liquidity and try again.");
+        return;
+      }
       const result = commit(
         launch(state, {
           creator: wallet,
@@ -155,7 +165,7 @@ export default function LaunchPage() {
           onchain: true,
           chainAddress: deployed.token,
           chainTx: deployed.tx,
-          curveAddress: deployed.curve,
+          poolAddress: deployed.pool,
         }),
       );
       if (!result.ok) {
@@ -180,7 +190,7 @@ export default function LaunchPage() {
       <div>
         <h1 className="page-title">Launch a token</h1>
         <p className="sub">
-          Launch sends one transaction on Robinhood Chain and costs gas only. The entire supply is minted to the shared bonding curve, the same factory for every browser, and opens at {PONS_PHANTOM_ETH} ETH ({usd(START_MARKET_CAP_USD)}). Buyers spend ETH from there. At 4.2 ETH raised, the curve locks a Uniswap pool. The token shows on Explore as soon as the transaction is on chain.
+          Launch deploys the token and locks a Uniswap v3 pool in one transaction, so DexScreener, BasedBot, and other traders can buy it immediately. It opens at {PONS_PHANTOM_ETH} ETH ({usd(START_MARKET_CAP_USD)}). The ETH you attach seeds that pool and is locked forever.
         </p>
         <div className="stack">
           <div className="launch-identity">
@@ -253,7 +263,11 @@ export default function LaunchPage() {
               )}
             </div>
           </div>
-          <p className="note">Graduates once the curve raises {raisedAmount(selected.threshold)} {selected.symbol}.</p>
+          <p className="note">Opens a locked Uniswap pool against ETH at launch. Explore lists it on every device.</p>
+          <label className="lbl">
+            Pool liquidity (ETH)
+            <input className="field" value={liquidity} inputMode="decimal" placeholder="0.01" onChange={(event) => setLiquidity(event.target.value)} />
+          </label>
           <label className="lbl">
             Creator tax {taxPct.toFixed(1)}%
             <input className="range" type="range" min={0} max={100} value={tax} onChange={(event) => setTax(Number(event.target.value))} />
@@ -262,11 +276,11 @@ export default function LaunchPage() {
             <input type="checkbox" checked={toLockers} onChange={(event) => setToLockers(event.target.checked)} />
             Redirect creator tax to lockers
           </label>
-          <p className="note">Charged on every buy and sell, in ETH, together with the 1% curve fee. Both are paid to your wallet.</p>
+          <p className="note">Uniswap takes 1% on every swap. Creator tax is recorded on Feeze for this launch.</p>
           <p className="note">
             {ethPair
-              ? "You do not deposit ETH to launch. The 1.68 ETH opening price is virtual, and trading starts against the curve."
-              : "The curve trades in ETH. Other quote assets are not live on this launcher yet."}
+              ? "Without ETH in the pool, bots and DexScreener cannot trade the token. Gas is separate from this liquidity."
+              : "Launches pair with ETH. Other quote assets are not live on this launcher yet."}
           </p>
           <button className="btn-accent launch-submit" disabled={!wallet || busy} onClick={() => void submit()}>
             {wallet ? (busy ? "Confirm in wallet…" : "Launch Token") : "Connect to launch"}
@@ -280,27 +294,23 @@ export default function LaunchPage() {
           <div className="quote-box">
             <div><span>Chain</span><span>Robinhood 4663</span></div>
             <div><span>Wallet ETH</span><span className="mono">{ethBalance == null ? "—" : compact(ethBalance, 4)}</span></div>
-            <div><span>Pool</span><span>Bonding curve, then a locked Uniswap pool at 4.2 ETH</span></div>
+            <div><span>Pool</span><span>Locked Uniswap v3 at launch</span></div>
+            <div><span>Liquidity</span><span className="mono">{liquidity.trim() || "—"} ETH</span></div>
             <div><span>Quote</span><span>{selected.symbol}</span></div>
           </div>
           <p className="note" style={{ marginTop: 12 }}>
-            Launch is one wallet confirmation on the shared factory. Only gas leaves your wallet. Explore on every device reads that same factory.
+            One confirmation deploys the token and locks the pool. Explore on every device reads the shared launcher.
           </p>
         </div>
         <div className="card">
           <h3>On-chain launch</h3>
           <p className="note">
-            The whole 1,000,000,000 supply is minted to the curve. Nobody, including you, receives tokens before the first buy. The curve sells and buys them back until it has raised 4.2 ETH, then that ETH and the tokens held back for the pool are locked in Uniswap.
+            80% of the 1,000,000,000 supply goes into the locked Uniswap pool with your ETH. You receive the remaining 20%. Opening market cap is set to about {usd(START_MARKET_CAP_USD)} from the 1.68 ETH phantom price, not from how much liquidity you deposit.
           </p>
         </div>
       </div>
     </div>
   );
-}
-
-function raisedAmount(value: number): string {
-  const digits = value >= 100 ? 0 : value >= 10 ? 1 : 2;
-  return value.toLocaleString("en-US", { maximumFractionDigits: digits });
 }
 
 function PairLogo({ pair }: { pair: Pair }) {
