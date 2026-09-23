@@ -5,7 +5,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Feeze",
-  description: "Launch coins that reward conviction. Lock supply to capture trading fees.",
+  description: "A launchpad where fees freeze with the holders.",
 };
 
 export const viewport: Viewport = {
