@@ -16,6 +16,7 @@ import {
   type Hex,
   type TransactionReceipt,
 } from "viem";
+import { CANONICAL_LAUNCHER } from "./chain-markets";
 import { robinhood } from "./chain";
 import { FEEZE_LAUNCHER_ABI, FEEZE_LAUNCHER_BYTECODE } from "./feeze-launcher";
 
@@ -208,6 +209,12 @@ async function ensureLauncher(
   client: ReturnType<typeof publicClient>,
   onStatus: (message: string) => void,
 ): Promise<Address> {
+  const shared = getAddress(CANONICAL_LAUNCHER);
+  const sharedCode = await client.getBytecode({ address: shared });
+  if (sharedCode && sharedCode !== "0x") {
+    localStorage.setItem(LAUNCHER_KEY, shared);
+    return shared;
+  }
   const saved = typeof localStorage === "undefined" ? null : localStorage.getItem(LAUNCHER_KEY);
   if (saved && isAddress(saved)) {
     const code = await client.getBytecode({ address: saved });

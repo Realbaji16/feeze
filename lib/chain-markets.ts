@@ -5,6 +5,8 @@ import type { Market } from "./types";
 
 /** Old launcher. Its pools were priced from the ETH deposit, so market caps are wrong. */
 const RETIRED_LAUNCHERS = new Set(["0x44063290406fb9a716a0e9bf5e2c278d9576d654"]);
+/** Shared launcher. Every browser lists pools created here, including launches from localhost. */
+export const CANONICAL_LAUNCHER = "0x9e5334bd07bec96f796392c70c32b5b75c7fd75b";
 const LAUNCHED_TOPIC = keccak256(toBytes("Launched(address,address,address)"));
 const ZERO = "0x0000000000000000000000000000000000000000";
 const ETH_PAIR = PAIRS.find((pair) => pair.symbol === "ETH")!.address;
@@ -58,7 +60,7 @@ async function explorerLogs(launcher: string): Promise<ScoutLog[]> {
 export async function readChainMarkets(extra: string[] = []): Promise<Market[]> {
   const launchers = [
     ...new Set(
-      extra
+      [CANONICAL_LAUNCHER, ...extra]
         .map((item) => cleanAddress(item))
         .filter((item): item is string => item !== null && !RETIRED_LAUNCHERS.has(item)),
     ),
