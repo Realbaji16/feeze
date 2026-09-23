@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createPublicClient, formatEther, http } from "viem";
 import { useYeeld } from "@/lib/store";
-import { PAIRS, type Pair } from "@/lib/pairs";
+import { PAIRS } from "@/lib/pairs";
+import { PairLogo } from "@/components/pair-logo";
 import { ipfsImagePath } from "@/lib/ipfs-path";
 import { bindTokenImage, uploadImageBlob } from "@/lib/share-image";
 import { compact, usd } from "@/lib/format";
@@ -310,31 +311,6 @@ export default function LaunchPage() {
         </div>
       </div>
     </div>
-  );
-}
-
-function PairLogo({ pair }: { pair: Pair }) {
-  const [failed, setFailed] = useState(false);
-  if (failed) {
-    return (
-      <span className={`pair-mark${pair.symbol === "ETH" ? " eth" : ""}`}>
-        {pair.symbol === "ETH" ? (
-          <svg width="14" height="14" viewBox="0 0 32 32" aria-hidden="true">
-            <path fill="#fff" d="M16 3 8 16.2 16 20.2 24 16.2 16 3zm0 19.2L8 18.2 16 29l8-10.8-8 3z" />
-          </svg>
-        ) : (
-          pair.symbol.slice(0, 1)
-        )}
-      </span>
-    );
-  }
-  return (
-    <img
-      className="pair-logo"
-      src={`https://cdn.robinhood.com/ncw_assets/logos/${pair.address}.png`}
-      alt=""
-      onError={() => setFailed(true)}
-    />
   );
 }
 

@@ -6,6 +6,7 @@ import { useYeeld } from "@/lib/store";
 import { PAIRS } from "@/lib/pairs";
 import { compact, timeAgo, usd } from "@/lib/format";
 import { PhasePill, Progress, TokenMark, marketStats } from "@/components/bits";
+import { PairLogo } from "@/components/pair-logo";
 import { listedMarket, readDexPool, type DexQuote } from "@/lib/dex";
 import type { Market } from "@/lib/types";
 
@@ -134,6 +135,7 @@ export default function MarketsPage() {
         <button className={pair === "all" ? "chip on" : "chip"} onClick={() => setPair("all")}>All pairs</button>
         {PAIRS.map((item) => (
           <button key={item.address} className={pair === item.address ? "chip on" : "chip"} onClick={() => setPair(item.address)}>
+            <PairLogo pair={item} size={16} />
             {item.symbol}
           </button>
         ))}
