@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { readChainMarkets } from "./chain-markets";
 import { PAIRS } from "./pairs";
 import { advanceTime, asAddress, clone, emptyState, fundSimulator } from "./protocol";
 import type { ActionResult, Market, ProtocolState } from "./types";
@@ -141,14 +142,23 @@ export function YeeldProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!ready) return;
     let stop = false;
-    const launchers = savedLaunchers().join(",");
-    fetch(`/api/launches?launchers=${launchers}`)
+    const extra = savedLaunchers();
+    const apply = (markets: Market[]) => {
+      if (stop || !markets.length) return;
+      setState((current) => mergeChainMarkets(current, markets));
+    };
+    fetch(`/api/launches?launchers=${extra.join(",")}`, { cache: "no-store" })
       .then((response) => (response.ok ? response.json() : []))
       .then((markets: Market[]) => {
-        if (stop || !Array.isArray(markets)) return;
-        setState((current) => mergeChainMarkets(current, markets));
+        if (Array.isArray(markets) && markets.length) {
+          apply(markets);
+          return;
+        }
+        return readChainMarkets(extra).then(apply);
       })
-      .catch(() => undefined);
+      .catch(() => {
+        readChainMarkets(extra).then(apply).catch(() => undefined);
+      });
     return () => {
       stop = true;
     };
