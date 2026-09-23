@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { commitTokenImage, probeImageStore, putTokenChunk, putTokenImage, readTokenImage } from "@/lib/token-image";
+import { commitTokenImage, probeImageStore, putTokenChunk, putTokenImage, readTokenImage, saveImageCid } from "@/lib/token-image";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -37,6 +37,7 @@ export async function POST(request: Request) {
     mime?: string;
     total?: number;
     hexLength?: number;
+    cid?: string;
   };
   try {
     body = (await request.json()) as typeof body;
@@ -47,6 +48,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Expected an image" }, { status: 400, headers });
   }
   try {
+    if (typeof body.cid === "string" && body.cid) {
+      const result = await saveImageCid(body.address, body.cid);
+      return NextResponse.json({ ok: true, result }, { headers });
+    }
     if (body.commit) {
       const result = await commitTokenImage(body.address, body.mime ?? "", body.total ?? 0, body.hexLength ?? 0);
       return NextResponse.json({ ok: true, result }, { headers });

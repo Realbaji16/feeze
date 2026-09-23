@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { readChainMarkets } from "./chain-markets";
 import { PAIRS } from "./pairs";
+import { cidFromImage } from "./ipfs-path";
 import { readSharedImage, shareTokenImage } from "./share-image";
 import { advanceTime, asAddress, clone, emptyState, fundSimulator } from "./protocol";
 import type { ActionResult, Market, ProtocolState } from "./types";
@@ -201,8 +202,9 @@ export function YeeldProvider({ children }: { children: React.ReactNode }) {
     const tick = () => {
       for (const market of state.markets) {
         if (!market.onchain) continue;
-        if (market.image?.startsWith("data:")) {
-          void shareTokenImage(market.address, market.image);
+        const picture = market.image;
+        if (picture && (picture.startsWith("data:") || cidFromImage(picture))) {
+          void shareTokenImage(market.address, picture);
           continue;
         }
         if (market.image) continue;

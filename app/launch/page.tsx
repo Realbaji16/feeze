@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import { createPublicClient, formatEther, http } from "viem";
 import { useYeeld } from "@/lib/store";
 import { PAIRS, type Pair } from "@/lib/pairs";
-import { shareTokenImage } from "@/lib/share-image";
+import { ipfsImagePath } from "@/lib/ipfs-path";
+import { bindTokenImage, uploadImageBlob } from "@/lib/share-image";
 import { compact, usd } from "@/lib/format";
 import { launch, PONS_PHANTOM_ETH, START_MARKET_CAP_USD } from "@/lib/protocol";
 import { robinhood } from "@/lib/chain";
@@ -27,6 +28,9 @@ export default function LaunchPage() {
   const [busy, setBusy] = useState(false);
   const [ethBalance, setEthBalance] = useState<number | null>(null);
   const imageInput = useRef<HTMLInputElement>(null);
+  const imageCid = useRef("");
+  const imageUpload = useRef<Promise<string> | null>(null);
+  const imageGen = useRef(0);
   const pairMenu = useRef<HTMLDivElement>(null);
   const [pairOpen, setPairOpen] = useState(false);
   const selected = PAIRS.find((item) => item.address === pair) ?? PAIRS[0];
@@ -73,12 +77,33 @@ export default function LaunchPage() {
       setStatus("Choose an image file.");
       return;
     }
+    const gen = imageGen.current + 1;
+    imageGen.current = gen;
+    imageCid.current = "";
+    imageUpload.current = null;
     try {
       setImage(await resizeImage(file));
-      setStatus(null);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not read that image.");
+      return;
     }
+    setStatus("Uploading to ipfs...");
+    const task = uploadImageBlob(file)
+      .then((uploaded) => {
+        if (imageGen.current !== gen) return "";
+        imageCid.current = uploaded.cid;
+        setImage(uploaded.image);
+        setStatus(null);
+        return uploaded.cid;
+      })
+      .catch((error: unknown) => {
+        if (imageGen.current !== gen) return "";
+        imageUpload.current = null;
+        setStatus(error instanceof Error ? error.message : "Could not upload that image to ipfs.");
+        return "";
+      });
+    imageUpload.current = task;
+    await task;
   }
 
   async function submit() {
@@ -100,6 +125,15 @@ export default function LaunchPage() {
     setBusy(true);
     setStatus("Switching to Robinhood Chain…");
     try {
+      let cid = imageCid.current;
+      if (image && !cid && imageUpload.current) {
+        setStatus("Uploading to ipfs...");
+        cid = await imageUpload.current;
+      }
+      if (image && !cid) {
+        setStatus("The image did not finish uploading to ipfs.");
+        return;
+      }
       const deployed = await deployFeezeCurve({
         name: cleanName,
         symbol: cleanSymbol,
@@ -112,7 +146,7 @@ export default function LaunchPage() {
           name,
           symbol,
           description,
-          image,
+          image: cid ? ipfsImagePath(cid) : image,
           website,
           twitter,
           pair,
@@ -128,10 +162,9 @@ export default function LaunchPage() {
         setStatus(`${result.error} The contract is already live at ${deployed.token}.`);
         return;
       }
-      if (image) {
-        setStatus("Saving the image for every browser…");
+      if (cid) {
         let saved = false;
-        for (let attempt = 0; attempt < 3 && !saved; attempt += 1) saved = await shareTokenImage(result.value.address, image);
+        for (let attempt = 0; attempt < 3 && !saved; attempt += 1) saved = await bindTokenImage(result.value.address, cid);
         if (!saved) setStatus("The token is live. This browser will keep saving the image until every browser can see it.");
       }
       router.push(`/coin/${result.value.address}`);
@@ -177,6 +210,7 @@ export default function LaunchPage() {
               }}
             />
             <div className="stack">
+              {status === "Uploading to ipfs..." && <p className="note">Uploading to ipfs...</p>}
               <div className="launch-name">
                 <label className="lbl">Token name<input className="field" value={name} placeholder="e.g. Northstar" onChange={(event) => setName(event.target.value)} /></label>
                 <label className="lbl">Ticker<input className="field" value={symbol} placeholder="SYMBOL" onChange={(event) => setSymbol(event.target.value.toUpperCase())} /></label>
@@ -237,7 +271,7 @@ export default function LaunchPage() {
           <button className="btn-accent launch-submit" disabled={!wallet || busy} onClick={() => void submit()}>
             {wallet ? (busy ? "Confirm in wallet…" : "Launch Token") : "Connect to launch"}
           </button>
-          {status && <p className="note">{status}</p>}
+          {status && status !== "Uploading to ipfs..." && <p className="note">{status}</p>}
         </div>
       </div>
       <div className="stack">

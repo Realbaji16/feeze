@@ -1,4 +1,5 @@
 import { IMAGE_CHUNK_CHARS, IMAGE_MAX_BYTES } from "./image-budget";
+import { ipfsImagePath } from "./ipfs-path";
 
 const APP_KEY = "eoprd8iz";
 const MAX_CHUNKS = 48;
@@ -88,7 +89,22 @@ export async function readTokenImage(address: string): Promise<string | null> {
   return image;
 }
 
+const CID = /^[A-Za-z0-9]{20,100}$/;
+
+export async function saveImageCid(address: string, cid: string): Promise<"saved" | "kept"> {
+  const key = keyFor(address);
+  if (!key) throw new Error("Image storage is not ready");
+  if (!CID.test(cid)) throw new Error("IPFS returned an invalid image");
+  const existing = await getValue(`${key}u`);
+  if (existing && CID.test(existing)) return "kept";
+  await setValue(`${key}u`, cid);
+  remember(key, ipfsImagePath(cid));
+  return "saved";
+}
+
 async function loadTokenImage(key: string): Promise<string | null> {
+  const cid = await getValue(`${key}u`);
+  if (cid && CID.test(cid)) return ipfsImagePath(cid);
   const count = Number(await getValue(`${key}n`));
   if (!Number.isInteger(count) || count < 1 || count > MAX_CHUNKS) return null;
   const mime = await getValue(`${key}m`);
