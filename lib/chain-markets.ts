@@ -8,6 +8,8 @@ import type { Market } from "./types";
 const RETIRED_LAUNCHERS = new Set(["0x44063290406fb9a716a0e9bf5e2c278d9576d654"]);
 /** Shared launcher. Every browser lists pools created here, including launches from localhost. */
 export const CANONICAL_LAUNCHER = "0x9e5334bd07bec96f796392c70c32b5b75c7fd75b";
+/** Shared curve factory. Every browser lists tokens created here. */
+export const CANONICAL_CURVE = "0xaa0b42c5b5663c6faf6c05c48145e1aa1691038c";
 const LAUNCHED_TOPIC = keccak256(toBytes("Launched(address,address,address)"));
 const ZERO = "0x0000000000000000000000000000000000000000";
 const ETH_PAIR = PAIRS.find((pair) => pair.symbol === "ETH")!.address;
@@ -317,7 +319,7 @@ export async function readChainMarkets(extra: string[] = [], curves: string[] = 
       if (created.ok) markets.push(created.value);
     }
   }
-  const curveFactories = curves
+  const curveFactories = [CANONICAL_CURVE, ...curves]
     .map((item) => cleanAddress(item))
     .filter((item): item is string => item !== null && !RETIRED_LAUNCHERS.has(item));
   const curved = curveFactories.length ? await readCurveMarkets(curveFactories) : [];

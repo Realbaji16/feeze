@@ -16,7 +16,7 @@ import {
   type Hex,
   type TransactionReceipt,
 } from "viem";
-import { CANONICAL_LAUNCHER } from "./chain-markets";
+import { CANONICAL_CURVE, CANONICAL_LAUNCHER } from "./chain-markets";
 import { robinhood } from "./chain";
 import type { ChainTrade } from "./chain-activity";
 import { quoteCurveBuy, quoteCurveSell } from "./curve-math";
@@ -437,6 +437,12 @@ async function ensureCurveFactory(
   client: ReturnType<typeof publicClient>,
   onStatus: (message: string) => void,
 ): Promise<Address> {
+  const shared = getAddress(CANONICAL_CURVE);
+  const sharedCode = await client.getBytecode({ address: shared });
+  if (sharedCode && sharedCode !== "0x") {
+    localStorage.setItem(CURVE_KEY, shared);
+    return shared;
+  }
   const saved = typeof localStorage === "undefined" ? null : localStorage.getItem(CURVE_KEY);
   if (saved && isAddress(saved)) {
     const code = await client.getBytecode({ address: saved });
