@@ -2,7 +2,7 @@
 
 import { getPair } from "@/lib/pairs";
 import { compact, usd } from "@/lib/format";
-import { marketCapUsd, spotPrice, curveProgress, TOTAL_SUPPLY } from "@/lib/protocol";
+import { marketCapUsd, spotPrice, curveProgress, TOTAL_SUPPLY, GRADUATION_MARKET_CAP_USD } from "@/lib/protocol";
 import type { Market, Phase } from "@/lib/types";
 
 export function TokenMark({ symbol, image, size = 36 }: { symbol: string; image?: string; size?: number }) {
@@ -38,6 +38,17 @@ export function PhasePill({ phase }: { phase: Phase }) {
 export function marketStats(market: Market) {
   const pair = getPair(market.pair);
   if (!pair) return null;
+  if (market.onchain && market.poolAddress && market.poolTokens > 0 && market.poolQuote > 0) {
+    const price = market.poolQuote / market.poolTokens;
+    const mcap = price * TOTAL_SUPPLY * pair.usd;
+    return {
+      pair,
+      price,
+      mcap,
+      progress: Math.min(1, mcap / GRADUATION_MARKET_CAP_USD),
+      fdvQuote: price * TOTAL_SUPPLY,
+    };
+  }
   const price = spotPrice(market, pair);
   return {
     pair,

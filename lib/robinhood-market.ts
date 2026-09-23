@@ -26,6 +26,7 @@ const SWAP_ROUTER = getAddress("0xCaf681a66D020601342297493863E78C959E5cb2");
 const ROUTER_SELF = "0x0000000000000000000000000000000000000002" as Address;
 const QUOTER = getAddress("0x33e885eD0Ec9bF04EcfB19341582aADCb4c8A9E7");
 const POOL_FEE = 10000;
+const FACTORY = getAddress("0x1f7d7550B1b028f7571E69A784071F0205FD2EfA");
 
 const routerAbi = [
   {
@@ -125,6 +126,30 @@ export function txExplorer(hash: string): string {
 
 export function dexScreener(pool: string): string {
   return `https://dexscreener.com/robinhood/${pool}`;
+}
+
+const factoryAbi = [
+  {
+    type: "function",
+    name: "getPool",
+    stateMutability: "view",
+    inputs: [
+      { name: "tokenA", type: "address" },
+      { name: "tokenB", type: "address" },
+      { name: "fee", type: "uint24" },
+    ],
+    outputs: [{ name: "pool", type: "address" }],
+  },
+] as const;
+
+export async function readUniswapPool(token: Address): Promise<Address | null> {
+  const pool = await publicClient().readContract({
+    address: FACTORY,
+    abi: factoryAbi,
+    functionName: "getPool",
+    args: [token, WETH, POOL_FEE],
+  });
+  return pool && pool !== zeroAddress ? pool : null;
 }
 
 let activeProvider: Eip1193 | null = null;

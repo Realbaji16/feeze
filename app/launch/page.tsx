@@ -23,7 +23,7 @@ export default function LaunchPage() {
   const [pair, setPair] = useState(PAIRS[0].address);
   const [tax, setTax] = useState(0);
   const [toLockers, setToLockers] = useState(false);
-  const [initial, setInitial] = useState("");
+  const [initial, setInitial] = useState("0.001");
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [ethBalance, setEthBalance] = useState<number | null>(null);
@@ -92,6 +92,10 @@ export default function LaunchPage() {
     }
     if (!/^[A-Z0-9]{2,10}$/.test(cleanSymbol)) {
       setStatus("Ticker must be 2–10 letters or numbers.");
+      return;
+    }
+    if (ethPair && !(Number(initial) > 0)) {
+      setStatus("Enter the ETH to lock in the pool. That is what opens the DexScreener chart.");
       return;
     }
     setBusy(true);
@@ -238,7 +242,7 @@ export default function LaunchPage() {
           </div>
           <p className="note">
             {ethPair
-              ? "Leave this empty to deploy the token only. DexScreener stays empty until a pool exists."
+              ? "This ETH is the pool. The opening price stays 1.68 ETH, and DexScreener charts the pool after the transaction confirms."
               : "Only the ETH pair opens a Uniswap pool. Other quote assets still deploy the token contract."}
           </p>
           <button className="btn-accent launch-submit" disabled={!wallet || busy} onClick={() => void submit()}>

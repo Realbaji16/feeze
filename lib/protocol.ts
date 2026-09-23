@@ -548,6 +548,20 @@ export function launch(state: ProtocolState, input: LaunchInput): ActionResult<M
   return { ok: true, state: next, value: market };
 }
 
+export function attachPool(state: ProtocolState, address: string, pool: string): ActionResult<Market> {
+  const next = clone(state);
+  const market = findMarket(next, address);
+  if (!market) return { ok: false, error: "Market not found" };
+  if (market.poolAddress) return { ok: true, state: next, value: market };
+  const pair = getPair(market.pair);
+  market.poolAddress = pool.toLowerCase();
+  if (pair && pair.usd > 0) {
+    market.poolTokens = TOTAL_SUPPLY;
+    market.poolQuote = START_MARKET_CAP_USD / pair.usd;
+  }
+  return { ok: true, state: next, value: market };
+}
+
 export function trade(
   state: ProtocolState,
   args: {

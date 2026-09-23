@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { formatEther, type Address } from "viem";
@@ -10,6 +10,7 @@ import {
   assetKey,
   balanceOf,
   claimCreator,
+  attachPool,
   graduate,
   holdersOf,
   positionRewards,
@@ -22,7 +23,7 @@ import type { ChainHolder, ChainTrade } from "@/lib/chain-activity";
 import { PhasePill, Progress, TokenMark, marketStats } from "@/components/bits";
 import { dexChartUrl, listedMarket, readDexPool, type DexQuote } from "@/lib/dex";
 import { GRADUATION_MARKET_CAP_USD, PONS_GRADUATION_ETH } from "@/lib/protocol";
-import { dexScreener, explainTx, quoteSwap, readHoldings, swapOnRobinhood, tokenExplorer, txExplorer } from "@/lib/robinhood-market";
+import { dexScreener, explainTx, quoteSwap, readHoldings, readUniswapPool, swapOnRobinhood, tokenExplorer, txExplorer } from "@/lib/robinhood-market";
 
 export default function CoinPage() {
   const params = useParams<{ address: string }>();
@@ -81,6 +82,25 @@ export default function CoinPage() {
       stop = true;
     };
   }, [market?.onchain, market?.poolAddress, market?.address, side, amount, numeric]);
+
+  const stateRef = useRef(state);
+  const commitRef = useRef(commit);
+  stateRef.current = state;
+  commitRef.current = commit;
+
+  useEffect(() => {
+    if (!market?.onchain || market.poolAddress) return;
+    let stop = false;
+    readUniswapPool(market.address as Address)
+      .then((pool) => {
+        if (stop || !pool) return;
+        commitRef.current(attachPool(stateRef.current, market.address, pool));
+      })
+      .catch(() => undefined);
+    return () => {
+      stop = true;
+    };
+  }, [market?.onchain, market?.poolAddress, market?.address]);
 
   useEffect(() => {
     if (!market?.poolAddress) {
@@ -202,8 +222,8 @@ export default function CoinPage() {
       </div>
       {market.description && <p className="sub">{market.description}</p>}
       <div className="grid-3">
-        <div className="stat"><span>Price</span><b>{dex ? usd(dex.priceUsd) : `${compact(stats.price, 6)} ${stats.pair.symbol}`}</b></div>
-        <div className="stat"><span>Market cap</span><b>{usd(listed.mcap)}</b></div>
+        <div className="stat"><span>Price</span><b>{dex ? usd(dex.priceUsd) : onchain && market.poolAddress ? usd(stats.price * stats.pair.usd) : onchain ? "—" : `${compact(stats.price, 6)} ${stats.pair.symbol}`}</b></div>
+        <div className="stat"><span>Market cap</span><b>{onchain && !market.poolAddress ? "—" : usd(listed.mcap)}</b></div>
         <div className="stat"><span>Volume</span><b>{usd(dex ? dex.volume24h : market.volumeQuote * stats.pair.usd)}</b></div>
       </div>
       <div className="grid-2">
@@ -214,14 +234,18 @@ export default function CoinPage() {
               <span className="mono faint">
                 {listed.graduated
                   ? "Graduated"
-                  : onchain
+                  : onchain && market.poolAddress
                     ? `${Math.round(listed.progress * 100)}% to ${PONS_GRADUATION_ETH} ETH · ${usd(GRADUATION_MARKET_CAP_USD)}`
-                    : `${Math.round(listed.progress * 100)}% to target`}
+                    : onchain
+                      ? "No pool yet"
+                      : `${Math.round(listed.progress * 100)}% to target`}
               </span>
             </div>
             <Progress value={listed.progress} graduated={listed.graduated} />
             {market.poolAddress ? (
               <iframe className="dex-frame" title={`${market.symbol} chart`} src={dexChartUrl(market.poolAddress)} />
+            ) : onchain ? (
+              <div className="chart note">This launch did not lock ETH, so there is no Uniswap pool for DexScreener to chart.</div>
             ) : (
               <CandleChart candles={candles} />
             )}
