@@ -176,29 +176,34 @@ export function YeeldProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!ready) return;
     let stop = false;
-    for (const market of state.markets) {
-      if (!market.onchain) continue;
-      if (market.image?.startsWith("data:")) {
-        void shareTokenImage(market.address, market.image);
-        continue;
+    const tick = () => {
+      for (const market of state.markets) {
+        if (!market.onchain) continue;
+        if (market.image?.startsWith("data:")) {
+          void shareTokenImage(market.address, market.image);
+          continue;
+        }
+        if (market.image) continue;
+        void readSharedImage(market.address)
+          .then((image) => {
+            if (stop || !image) return;
+            setState((current) => {
+              const match = current.markets.find((item) => item.address === market.address);
+              if (!match || match.image) return current;
+              return {
+                ...current,
+                markets: current.markets.map((item) => (item.address === market.address ? { ...item, image } : item)),
+              };
+            });
+          })
+          .catch(() => undefined);
       }
-      if (market.image) continue;
-      void readSharedImage(market.address)
-        .then((image) => {
-          if (stop || !image) return;
-          setState((current) => {
-            const match = current.markets.find((item) => item.address === market.address);
-            if (!match || match.image) return current;
-            return {
-              ...current,
-              markets: current.markets.map((item) => (item.address === market.address ? { ...item, image } : item)),
-            };
-          });
-        })
-        .catch(() => undefined);
-    }
+    };
+    tick();
+    const id = window.setInterval(tick, 8000);
     return () => {
       stop = true;
+      window.clearInterval(id);
     };
   }, [ready, state.markets]);
 

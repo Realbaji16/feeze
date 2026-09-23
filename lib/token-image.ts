@@ -1,5 +1,5 @@
 const APP_KEY = "eoprd8iz";
-const CHUNK = 900;
+const CHUNK = 700;
 
 function keyFor(address: string): string | null {
   const key = address.trim().toLowerCase();
@@ -49,11 +49,11 @@ async function setValue(key: string, value: string): Promise<boolean> {
 export async function readTokenImage(address: string): Promise<string | null> {
   const key = keyFor(address);
   if (!key) return null;
-  const count = Number(await getValue(key));
+  const count = Number(await getValue(`${key}n`));
   if (!Number.isInteger(count) || count < 1 || count > 40) return null;
   let packed = "";
   for (let index = 0; index < count; index++) {
-    const part = await getValue(`${key}${index}`);
+    const part = await getValue(`${key}p${index}`);
     if (!part) return null;
     packed += part;
   }
@@ -72,15 +72,28 @@ export async function putTokenImage(address: string, image: string): Promise<"sa
   const count = Math.ceil(packed.length / CHUNK);
   if (count < 1 || count > 40) throw new Error("Image is too large");
   for (let index = 0; index < count; index++) {
-    const ok = await setValue(`${key}${index}`, packed.slice(index * CHUNK, (index + 1) * CHUNK));
-    if (!ok) throw new Error("Could not save image");
+    const ok = await setValue(`${key}p${index}`, packed.slice(index * CHUNK, (index + 1) * CHUNK));
+    if (!ok) throw new Error(`Could not save image part ${index}`);
   }
-  if (!(await setValue(key, String(count)))) throw new Error("Could not save image");
+  let check = "";
+  for (let index = 0; index < count; index++) {
+    const part = await getValue(`${key}p${index}`);
+    if (!part) throw new Error(`Image part ${index} missing`);
+    check += part;
+  }
+  if (unpack(check) !== image) throw new Error("Saved image did not match");
+  if (!(await setValue(`${key}n`, String(count)))) throw new Error("Could not save image");
   return "saved";
 }
 
-export async function probeImageStore(): Promise<{ post: number; get: string }> {
-  const ok = await setValue("feezeprobe", "ok");
-  const value = await getValue("feezeprobe");
-  return { post: ok ? 200 : 0, get: value ?? "" };
+export async function probeImageStore(): Promise<{ match: boolean; len: number; error?: string }> {
+  const address = `0x${"11".repeat(20)}`;
+  const image = `data:image/jpeg;base64,${"A".repeat(2500)}`;
+  try {
+    await putTokenImage(address, image);
+    const back = await readTokenImage(address);
+    return { match: back === image, len: back?.length ?? 0 };
+  } catch (error) {
+    return { match: false, len: 0, error: error instanceof Error ? error.message : "probe failed" };
+  }
 }
