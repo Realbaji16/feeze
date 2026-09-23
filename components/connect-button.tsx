@@ -5,7 +5,10 @@ import { shortAddr } from "@/lib/format";
 import { PRIVY_APP_ID } from "@/lib/privy";
 import { useYeeld } from "@/lib/store";
 
-const MISSING_APP = "Add NEXT_PUBLIC_PRIVY_APP_ID to .env.local, allow http://localhost:3000 in the Privy dashboard, then restart the dev server.";
+function missingAppMessage() {
+  const origin = typeof window === "undefined" ? "https://feeze.fun" : window.location.origin;
+  return `Allow ${origin} under Privy Allowed origins, then reload.`;
+}
 
 export function ConnectButton({ className = "btn-accent", label = "Connect" }: { className?: string; label?: string }) {
   if (!PRIVY_APP_ID) return <Unconfigured className={className} label={label} />;
@@ -22,7 +25,7 @@ function Unconfigured({ className, label }: { className: string; label: string }
     );
   }
   return (
-    <button className={className} onClick={() => notify(MISSING_APP)}>
+    <button className={className} onClick={() => notify(missingAppMessage())}>
       {label}
     </button>
   );

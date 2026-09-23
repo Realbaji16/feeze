@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { PAIRS } from "./pairs";
 import { advanceTime, asAddress, clone, emptyState, fundSimulator } from "./protocol";
-import type { ActionResult, ProtocolState } from "./types";
+import type { ActionResult, Market, ProtocolState } from "./types";
 
 const KEY = "feeze.simulator.v2";
 const PREVIOUS_KEY = "feeze.simulator.v1";
@@ -24,10 +24,17 @@ interface Store {
 const Ctx = createContext<Store | null>(null);
 
 const PAIR_ASSETS = new Set(PAIRS.map((pair) => pair.address));
+/** Launches from the old launcher. Their opening price was the deposit, not 1.68 ETH. */
+const RETIRED_MARKETS = new Set([
+  "0xcaba674193e2784008e770ce6009334c6afd85a3",
+  "0xd10363c3e12538d4042134364b194d1e6f1d7619",
+]);
 
 /** Demo coins live only in the simulator. A tradeable launch has a Robinhood pool. */
 function keepTradeable(state: ProtocolState): ProtocolState {
-  const markets = (state.markets ?? []).filter((market) => market.onchain && market.poolAddress);
+  const markets = (state.markets ?? []).filter(
+    (market) => market.onchain && market.poolAddress && !RETIRED_MARKETS.has(market.address.toLowerCase()),
+  );
   const keep = new Set(markets.map((market) => market.address));
   const removed = markets.length !== (state.markets ?? []).length;
   const balances: ProtocolState["balances"] = {};
@@ -53,6 +60,29 @@ function keepTradeable(state: ProtocolState): ProtocolState {
     yeeldIndexes: removed ? {} : state.yeeldIndexes,
     yeeldEffective: removed ? 0 : state.yeeldEffective,
     burnedYeeld: removed ? 0 : state.burnedYeeld,
+  };
+}
+
+function savedLaunchers(): string[] {
+  if (typeof localStorage === "undefined") return [];
+  return ["feeze.launcher.v1", "feeze.launcher.v2", "feeze.launcher.v3"]
+    .map((key) => localStorage.getItem(key) ?? "")
+    .filter((value) => /^0x[0-9a-fA-F]{40}$/.test(value));
+}
+
+function mergeChainMarkets(state: ProtocolState, incoming: Market[]): ProtocolState {
+  if (!incoming.length) return state;
+  const byAddress = new Map(state.markets.map((market) => [market.address, market]));
+  let added = false;
+  for (const market of incoming) {
+    if (RETIRED_MARKETS.has(market.address.toLowerCase()) || byAddress.has(market.address)) continue;
+    byAddress.set(market.address, market);
+    added = true;
+  }
+  if (!added) return state;
+  return {
+    ...state,
+    markets: [...byAddress.values()].sort((a, b) => b.launchedAt - a.launchedAt),
   };
 }
 
@@ -107,6 +137,22 @@ export function YeeldProvider({ children }: { children: React.ReactNode }) {
     setState(load());
     setReady(true);
   }, []);
+
+  useEffect(() => {
+    if (!ready) return;
+    let stop = false;
+    const launchers = savedLaunchers().join(",");
+    fetch(`/api/launches?launchers=${launchers}`)
+      .then((response) => (response.ok ? response.json() : []))
+      .then((markets: Market[]) => {
+        if (stop || !Array.isArray(markets)) return;
+        setState((current) => mergeChainMarkets(current, markets));
+      })
+      .catch(() => undefined);
+    return () => {
+      stop = true;
+    };
+  }, [ready]);
 
   useEffect(() => {
     if (!ready) return;
