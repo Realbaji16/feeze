@@ -5,18 +5,20 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { formatEther, type Address } from "viem";
 import { useYeeld } from "@/lib/store";
-import { compact, formatDate, shortAddr, usd } from "@/lib/format";
+import { compact, formatDate, shortAddr, timeAgo, usd } from "@/lib/format";
 import {
   assetKey,
   balanceOf,
   claimCreator,
   graduate,
+  holdersOf,
   positionRewards,
   quoteTrade,
   sweepOrphan,
   trade,
   GRACE_MS,
 } from "@/lib/protocol";
+import type { ChainHolder, ChainTrade } from "@/lib/chain-activity";
 import { PhasePill, Progress, TokenMark, marketStats } from "@/components/bits";
 import { dexChartUrl, listedMarket, readDexPool, type DexQuote } from "@/lib/dex";
 import { GRADUATION_MARKET_CAP_USD, PONS_GRADUATION_ETH } from "@/lib/protocol";
@@ -29,6 +31,9 @@ export default function CoinPage() {
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [amount, setAmount] = useState("0.1");
   const [slippage, setSlippage] = useState(100);
+  const [tab, setTab] = useState<"trades" | "holders" | "locks">("trades");
+  const [chainTrades, setChainTrades] = useState<ChainTrade[]>([]);
+  const [chainHolders, setChainHolders] = useState<ChainHolder[]>([]);
   const [chainBal, setChainBal] = useState<{ eth: number; token: number } | null>(null);
   const [chainOut, setChainOut] = useState<string | null>(null);
   const [chainNote, setChainNote] = useState<string | null>(null);
@@ -98,6 +103,28 @@ export default function CoinPage() {
     };
   }, [market?.poolAddress]);
 
+  useEffect(() => {
+    if (!market?.onchain) return;
+    let stop = false;
+    const load = () => {
+      const pool = market.poolAddress ?? "";
+      fetch(`/api/token?address=${market.address}&pool=${pool}`)
+        .then((response) => (response.ok ? response.json() : { holders: [], trades: [] }))
+        .then((body: { holders?: ChainHolder[]; trades?: ChainTrade[] }) => {
+          if (stop) return;
+          setChainHolders(body.holders ?? []);
+          setChainTrades(body.trades ?? []);
+        })
+        .catch(() => undefined);
+    };
+    load();
+    const id = window.setInterval(load, 20_000);
+    return () => {
+      stop = true;
+      window.clearInterval(id);
+    };
+  }, [market?.onchain, market?.address, market?.poolAddress]);
+
   if (!market || !stats) {
     return (
       <div className="card">
@@ -122,6 +149,8 @@ export default function CoinPage() {
     statsProgress: stats.progress,
   });
   const candles = buildCandles(market.trades);
+  const simHolders = holdersOf(state, market.address);
+  const trades = onchain ? chainTrades : market.trades;
   const locks = state.locks.filter((lock) => lock.token === market.address && lock.kind === "reward");
 
   async function submit() {
@@ -198,23 +227,84 @@ export default function CoinPage() {
             )}
           </div>
           <div className="card">
-            <table className="table">
-              <tbody>
-                {locks.map((lock) => {
-                  const earned = positionRewards(state, lock);
-                  const reward = Object.values(earned).reduce((sum, value) => sum + value, 0);
-                  return (
-                    <tr key={lock.id}>
-                      <td className="mono">{shortAddr(lock.owner)}</td>
-                      <td className="mono">{compact(lock.amount)} · {lock.multiplier}×</td>
-                      <td className="faint">{lock.withdrawn ? "withdrawn" : formatDate(lock.expiry)}</td>
-                      <td className="right mono">{compact(reward, 4)} {stats.pair.symbol}</td>
-                    </tr>
-                  );
-                })}
-                {locks.length === 0 && <tr><td className="note">No reward locks yet.</td></tr>}
-              </tbody>
-            </table>
+            <div className="tabs">
+              {(["trades", "holders", "locks"] as const).map((key) => (
+                <button key={key} className={tab === key ? "on" : ""} onClick={() => setTab(key)}>{key}</button>
+              ))}
+            </div>
+            {tab === "trades" && (
+              <table className="table">
+                <tbody>
+                  {onchain
+                    ? chainTrades.map((row) => (
+                        <tr key={row.hash}>
+                          <td className="mono" style={{ color: row.side === "buy" ? "var(--green)" : "var(--red)" }}>{row.side}</td>
+                          <td className="mono">{compact(row.tokenAmount)} {market.symbol}</td>
+                          <td className="mono">{row.quoteAmount == null ? "—" : `${compact(row.quoteAmount, 4)} ETH`}</td>
+                          <td className="faint">{timeAgo(row.time, Date.now())} · {shortAddr(row.trader)}</td>
+                          <td className="right"><a href={txExplorer(row.hash)} target="_blank" rel="noreferrer">tx</a></td>
+                        </tr>
+                      ))
+                    : market.trades.map((row) => (
+                        <tr key={row.id}>
+                          <td className="mono" style={{ color: row.side === "buy" ? "var(--green)" : "var(--red)" }}>{row.side}</td>
+                          <td className="mono">{compact(row.tokenAmount)} {market.symbol}</td>
+                          <td className="mono">{compact(row.quoteGross, 4)} {stats.pair.symbol}</td>
+                          <td className="faint">{timeAgo(row.time, state.now)} · {row.venue}</td>
+                        </tr>
+                      ))}
+                  {trades.length === 0 && (
+                    <tr><td className="note">No trades yet.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            )}
+            {tab === "holders" && (
+              <table className="table">
+                <tbody>
+                  {onchain
+                    ? chainHolders.map((holder) => (
+                        <tr key={holder.address}>
+                          <td className="mono">
+                            <a href={`https://robinhoodchain.blockscout.com/address/${holder.address}`} target="_blank" rel="noreferrer">{shortAddr(holder.address)}</a>
+                            {market.poolAddress && holder.address === market.poolAddress.toLowerCase() ? " · pool" : ""}
+                          </td>
+                          <td className="right mono">{compact(holder.amount)} {market.symbol}</td>
+                          <td className="right faint">{(holder.share * 100).toFixed(2)}%</td>
+                        </tr>
+                      ))
+                    : simHolders.map((holder) => (
+                        <tr key={holder.account}>
+                          <td className="mono">{shortAddr(holder.account)}</td>
+                          <td className="right mono">{compact(holder.amount)}</td>
+                          <td className="right faint">{holder.locked > 0 ? `${compact(holder.locked)} locked` : ""}</td>
+                        </tr>
+                      ))}
+                  {(onchain ? chainHolders : simHolders).length === 0 && (
+                    <tr><td className="note">No holders yet.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            )}
+            {tab === "locks" && (
+              <table className="table">
+                <tbody>
+                  {locks.map((lock) => {
+                    const earned = positionRewards(state, lock);
+                    const reward = Object.values(earned).reduce((sum, value) => sum + value, 0);
+                    return (
+                      <tr key={lock.id}>
+                        <td className="mono">{shortAddr(lock.owner)}</td>
+                        <td className="mono">{compact(lock.amount)} · {lock.multiplier}×</td>
+                        <td className="faint">{lock.withdrawn ? "withdrawn" : formatDate(lock.expiry)}</td>
+                        <td className="right mono">{compact(reward, 4)} {stats.pair.symbol}</td>
+                      </tr>
+                    );
+                  })}
+                  {locks.length === 0 && <tr><td className="note">No reward locks yet.</td></tr>}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
         <div className="stack">
