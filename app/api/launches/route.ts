@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { CANONICAL_LAUNCHER, readChainMarkets } from "@/lib/chain-markets";
+import { CANONICAL_LAUNCHER, discoverLaunchers, readChainMarkets } from "@/lib/chain-markets";
 import { readTokenImage } from "@/lib/token-image";
 
 export const dynamic = "force-dynamic";
@@ -9,6 +9,15 @@ export const fetchCache = "force-no-store";
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const extra = url.searchParams.get("launchers") ?? "";
+  if (url.searchParams.get("discover") === "1") {
+    try {
+      const found = await discoverLaunchers();
+      return NextResponse.json(found, { headers: { "cache-control": "no-store" } });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "discover failed";
+      return NextResponse.json({ error: message }, { headers: { "cache-control": "no-store" } });
+    }
+  }
   if (url.searchParams.get("probe") === "1") {
     const started = Date.now();
     let scoutStatus = 0;

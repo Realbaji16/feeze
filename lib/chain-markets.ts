@@ -226,6 +226,42 @@ async function readCurveMarkets(factories: string[]): Promise<Market[]> {
   return markets;
 }
 
+/** Recent Launched events from any contract, so a new curve factory can be shared. */
+export async function discoverLaunchers(): Promise<
+  { address: string; token: string; second: string; creator: string; block: string }[]
+> {
+  const client = rpc();
+  const latest = await client.getBlockNumber();
+  const event = parseAbiItem("event Launched(address indexed token, address indexed curve, address indexed creator)");
+  const found: { address: string; token: string; second: string; creator: string; block: string }[] = [];
+  const span = 2_000n;
+  const start = latest > 20_000n ? latest - 20_000n : 0n;
+  for (let from = start; from <= latest; from += span) {
+    const to = from + span - 1n > latest ? latest : from + span - 1n;
+    try {
+      const logs = await client.getLogs({ event, fromBlock: from, toBlock: to });
+      for (const log of logs) {
+        found.push({
+          address: log.address.toLowerCase(),
+          token: (log.args.token ?? "").toLowerCase(),
+          second: (log.args.curve ?? "").toLowerCase(),
+          creator: (log.args.creator ?? "").toLowerCase(),
+          block: log.blockNumber.toString(),
+        });
+      }
+    } catch (error) {
+      found.push({
+        address: "error",
+        token: from.toString(),
+        second: error instanceof Error ? error.message.slice(0, 160) : "fail",
+        creator: "",
+        block: to.toString(),
+      });
+    }
+  }
+  return found;
+}
+
 /** Pooled Feeze launches, including ones this browser no longer has in local storage. */
 export async function readChainMarkets(extra: string[] = [], curves: string[] = []): Promise<Market[]> {
   const launchers = [

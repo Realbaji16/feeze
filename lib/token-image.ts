@@ -1,6 +1,6 @@
 const APP_KEY = "eoprd8iz";
 const CHUNK = 100;
-const MAX_BYTES = 900;
+const MAX_BYTES = 400;
 
 function keyFor(address: string): string | null {
   const key = address.trim().toLowerCase();

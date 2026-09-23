@@ -33,10 +33,10 @@ function drawDataUrl(dataUrl: string, size: number, quality: number): Promise<st
 export async function shrinkDataUrl(dataUrl: string): Promise<string> {
   if (!dataUrl.startsWith("data:image")) return dataUrl;
   let best = dataUrl;
-  for (const size of [64, 48, 32]) {
-    for (const quality of [0.5, 0.35, 0.22]) {
+  for (const size of [48, 32, 24, 16]) {
+    for (const quality of [0.4, 0.22, 0.12]) {
       best = await drawDataUrl(dataUrl, size, quality);
-      if (byteSize(best) <= 900) return best;
+      if (byteSize(best) <= 400) return best;
     }
   }
   return best;
@@ -61,7 +61,7 @@ export async function shareTokenImage(address: string, image: string): Promise<v
   sent.add(key);
   try {
     const small = await shrinkDataUrl(image);
-    if (!small.startsWith("data:image") || byteSize(small) > 900) {
+    if (!small.startsWith("data:image") || byteSize(small) > 400) {
       sent.delete(key);
       return;
     }
