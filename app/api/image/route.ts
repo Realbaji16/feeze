@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
-import { probeImageStore, putTokenImage, readTokenImage } from "@/lib/token-image";
+import { commitTokenImage, probeImageStore, putTokenChunk, putTokenImage, readTokenImage } from "@/lib/token-image";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 export const fetchCache = "force-no-store";
+export const maxDuration = 60;
 
 const headers = { "cache-control": "no-store" };
 
@@ -27,16 +28,36 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  let body: { address?: string; image?: string };
+  let body: {
+    address?: string;
+    image?: string;
+    index?: number;
+    hex?: string;
+    commit?: boolean;
+    mime?: string;
+    total?: number;
+    hexLength?: number;
+  };
   try {
-    body = (await request.json()) as { address?: string; image?: string };
+    body = (await request.json()) as typeof body;
   } catch {
     return NextResponse.json({ error: "Expected an image" }, { status: 400, headers });
   }
-  if (!body.address || !body.image) {
+  if (!body.address) {
     return NextResponse.json({ error: "Expected an image" }, { status: 400, headers });
   }
   try {
+    if (body.commit) {
+      const result = await commitTokenImage(body.address, body.mime ?? "", body.total ?? 0, body.hexLength ?? 0);
+      return NextResponse.json({ ok: true, result }, { headers });
+    }
+    if (typeof body.index === "number" && typeof body.hex === "string") {
+      const result = await putTokenChunk(body.address, body.index, body.hex);
+      return NextResponse.json({ ok: true, result }, { headers });
+    }
+    if (!body.image) {
+      return NextResponse.json({ error: "Expected an image" }, { status: 400, headers });
+    }
     const result = await putTokenImage(body.address, body.image);
     return NextResponse.json({ ok: true, result }, { headers });
   } catch (error) {

@@ -47,7 +47,7 @@ export async function GET(request: Request) {
     const withImages = await Promise.all(
       markets.map(async (market) => {
         if (market.image) return market;
-        const image = await readTokenImage(market.address);
+        const image = await readTokenImage(market.address).catch(() => null);
         return image ? { ...market, image } : market;
       }),
     );

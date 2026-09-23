@@ -128,7 +128,12 @@ export default function LaunchPage() {
         setStatus(`${result.error} The contract is already live at ${deployed.token}.`);
         return;
       }
-      if (image) void shareTokenImage(result.value.address, image);
+      if (image) {
+        setStatus("Saving the image for every browser…");
+        let saved = false;
+        for (let attempt = 0; attempt < 3 && !saved; attempt += 1) saved = await shareTokenImage(result.value.address, image);
+        if (!saved) setStatus("The token is live. This browser will keep saving the image until every browser can see it.");
+      }
       router.push(`/coin/${result.value.address}`);
     } catch (error) {
       setStatus(explainTx(error));

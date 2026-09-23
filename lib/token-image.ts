@@ -1,6 +1,7 @@
+import { IMAGE_CHUNK_CHARS, IMAGE_MAX_BYTES } from "./image-budget";
+
 const APP_KEY = "eoprd8iz";
-const CHUNK = 100;
-const MAX_BYTES = 400;
+const MAX_CHUNKS = 48;
 
 function keyFor(address: string): string | null {
   const key = address.trim().toLowerCase();
@@ -42,16 +43,8 @@ async function setValue(key: string, value: string): Promise<void> {
   }
 }
 
-function parseDataUrl(image: string): { mime: "png" | "jpg"; hex: string } | null {
-  const match = image.match(/^data:image\/(png|jpeg|jpg);base64,([A-Za-z0-9+/=\s]+)$/);
-  if (!match) return null;
-  const bytes = Buffer.from(match[2].replaceAll(/\s/g, ""), "base64");
-  if (bytes.length < 8 || bytes.length > MAX_BYTES) return null;
-  return { mime: match[1] === "png" ? "png" : "jpg", hex: bytes.toString("hex") };
-}
-
 async function eachChunk(count: number, run: (index: number) => Promise<void>): Promise<void> {
-  const width = 4;
+  const width = 8;
   let cursor = 0;
   async function worker() {
     while (cursor < count) {
@@ -63,53 +56,125 @@ async function eachChunk(count: number, run: (index: number) => Promise<void>): 
   await Promise.all(Array.from({ length: Math.min(width, count) }, () => worker()));
 }
 
+const memory = new Map<string, { image: string | null; at: number }>();
+
+function remember(key: string, image: string | null) {
+  memory.set(key, { image, at: Date.now() });
+}
+
+function dataUrl(mime: string, hex: string): string {
+  const encoded = Buffer.from(hex, "hex").toString("base64");
+  return `data:image/${mime === "png" ? "png" : "jpeg"};base64,${encoded}`;
+}
+
+async function loadHex(key: string, count: number): Promise<string | null> {
+  const parts = new Array<string>(count);
+  await eachChunk(count, async (index) => {
+    parts[index] = (await getValue(`${key}h${index}`)) ?? "";
+  });
+  if (parts.some((part) => !part || !/^[0-9a-f]+$/i.test(part))) return null;
+  const hex = parts.join("");
+  if (hex.length % 2 !== 0 || hex.length / 2 > IMAGE_MAX_BYTES) return null;
+  return hex;
+}
+
 export async function readTokenImage(address: string): Promise<string | null> {
   const key = keyFor(address);
   if (!key) return null;
+  const hit = memory.get(key);
+  if (hit && Date.now() - hit.at < (hit.image ? 10 * 60_000 : 3_000)) return hit.image;
+  const image = await loadTokenImage(key);
+  remember(key, image);
+  return image;
+}
+
+async function loadTokenImage(key: string): Promise<string | null> {
   const count = Number(await getValue(`${key}n`));
-  if (!Number.isInteger(count) || count < 1 || count > 40) return null;
+  if (!Number.isInteger(count) || count < 1 || count > MAX_CHUNKS) return null;
   const mime = await getValue(`${key}m`);
   if (mime !== "png" && mime !== "jpg") return null;
-  const parts = new Array<string>(count);
-  await eachChunk(count, async (index) => {
-    const part = await getValue(`${key}h${index}`);
-    parts[index] = part ?? "";
-  });
-  const hex = parts.join("");
-  if (parts.some((part) => !part) || hex.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(hex)) return null;
-  const encoded = Buffer.from(hex, "hex").toString("base64");
-  return `data:image/${mime === "png" ? "png" : "jpeg"};base64,${encoded}`;
+  const hex = await loadHex(key, count);
+  if (!hex) return null;
+  return dataUrl(mime, hex);
+}
+
+function parseDataUrl(image: string): { mime: "png" | "jpg"; hex: string } | null {
+  const match = image.match(/^data:image\/(png|jpeg|jpg);base64,([A-Za-z0-9+/=\s]+)$/);
+  if (!match) return null;
+  const bytes = Buffer.from(match[2].replaceAll(/\s/g, ""), "base64");
+  if (bytes.length < 8 || bytes.length > IMAGE_MAX_BYTES) return null;
+  return { mime: match[1] === "png" ? "png" : "jpg", hex: bytes.toString("hex") };
+}
+
+async function alreadyStored(key: string): Promise<boolean> {
+  const count = Number(await getValue(`${key}n`));
+  return Number.isInteger(count) && count >= 1 && count <= MAX_CHUNKS;
+}
+
+export async function putTokenChunk(address: string, index: number, hex: string): Promise<"saved" | "kept"> {
+  const key = keyFor(address);
+  if (!key) throw new Error("Image storage is not ready");
+  if (!Number.isInteger(index) || index < 0 || index >= MAX_CHUNKS) throw new Error("Image is too large");
+  const part = hex.trim().toLowerCase();
+  if (part.length < 2 || part.length > IMAGE_CHUNK_CHARS || part.length % 2 !== 0 || !/^[0-9a-f]+$/.test(part)) {
+    throw new Error("Image is too large");
+  }
+  if (await alreadyStored(key)) return "kept";
+  await setValue(`${key}h${index}`, part);
+  return "saved";
+}
+
+export async function commitTokenImage(
+  address: string,
+  mime: string,
+  total: number,
+  hexLength: number,
+): Promise<"saved" | "kept"> {
+  const key = keyFor(address);
+  if (!key) throw new Error("Image storage is not ready");
+  if (mime !== "png" && mime !== "jpg") throw new Error("Expected an image");
+  if (!Number.isInteger(total) || total < 1 || total > MAX_CHUNKS) throw new Error("Image is too large");
+  if (!Number.isInteger(hexLength) || hexLength < 16 || hexLength > IMAGE_MAX_BYTES * 2 || hexLength % 2 !== 0) {
+    throw new Error("Image is too large");
+  }
+  if (await alreadyStored(key)) return "kept";
+  const hex = await loadHex(key, total);
+  if (!hex || hex.length !== hexLength) throw new Error("Saved image did not match");
+  await setValue(`${key}m`, mime);
+  await setValue(`${key}n`, String(total));
+  remember(key, dataUrl(mime, hex));
+  return "saved";
 }
 
 export async function putTokenImage(address: string, image: string): Promise<"saved" | "kept"> {
   const key = keyFor(address);
   if (!key) throw new Error("Image storage is not ready");
-  const existing = await readTokenImage(address);
-  if (existing) return "kept";
+  if (await alreadyStored(key)) return "kept";
   const parsed = parseDataUrl(image);
   if (!parsed) throw new Error(image.startsWith("data:image") ? "Image is too large" : "Expected an image");
-  const count = Math.ceil(parsed.hex.length / CHUNK);
+  const count = Math.ceil(parsed.hex.length / IMAGE_CHUNK_CHARS);
   await eachChunk(count, async (index) => {
-    await setValue(`${key}h${index}`, parsed.hex.slice(index * CHUNK, (index + 1) * CHUNK));
+    const part = parsed.hex.slice(index * IMAGE_CHUNK_CHARS, (index + 1) * IMAGE_CHUNK_CHARS);
+    await setValue(`${key}h${index}`, part);
   });
-  const back = new Array<string>(count);
-  await eachChunk(count, async (index) => {
-    back[index] = (await getValue(`${key}h${index}`)) ?? "";
-  });
-  if (back.join("") !== parsed.hex) throw new Error("Saved image did not match");
+  const back = await loadHex(key, count);
+  if (back !== parsed.hex) throw new Error("Saved image did not match");
   await setValue(`${key}m`, parsed.mime);
   await setValue(`${key}n`, String(count));
+  remember(key, dataUrl(parsed.mime, parsed.hex));
   return "saved";
 }
 
 export async function probeImageStore(): Promise<{ match: boolean; len: number; result?: string; error?: string }> {
-  const address = `0x${"11".repeat(20)}`;
-  const bytes = Buffer.alloc(400, 7);
+  const address = `0x${"22".repeat(20)}`;
+  const bytes = Buffer.alloc(1500, 9);
   bytes[0] = 0xff;
   bytes[1] = 0xd8;
+  bytes[2] = 0xff;
   const image = `data:image/jpeg;base64,${bytes.toString("base64")}`;
   try {
     const result = await putTokenImage(address, image);
+    memory.delete(address.slice(2));
     const back = await readTokenImage(address);
     return { result, match: back === image, len: back?.length ?? 0 };
   } catch (error) {
