@@ -110,9 +110,11 @@ type Eip1193 = {
 };
 
 export function explainTx(error: unknown): string {
-  if (error instanceof BaseError) return error.shortMessage;
-  if (error instanceof Error) return error.message;
-  return "Transaction failed";
+  const message = error instanceof BaseError ? error.shortMessage : error instanceof Error ? error.message : "Transaction failed";
+  if (/unexpected error/i.test(message)) {
+    return "Phantom could not reach Robinhood Chain. Approve adding that network in the wallet, then launch again.";
+  }
+  return message;
 }
 
 export function isWethPair(pair: string): boolean {
@@ -156,9 +158,11 @@ export async function readUniswapPool(token: Address): Promise<Address | null> {
 }
 
 let activeProvider: Eip1193 | null = null;
+let providerKind = "";
 
-export function setChainProvider(provider: Eip1193 | null) {
+export function setChainProvider(provider: Eip1193 | null, kind?: string) {
   activeProvider = provider;
+  providerKind = kind ?? "";
 }
 
 function injected(): Eip1193 {
@@ -173,26 +177,49 @@ function publicClient() {
   return createPublicClient({ chain: robinhood, transport: http(robinhood.rpcUrls.default.http[0]) });
 }
 
+const robinhoodWalletChain = {
+  chainId: "0x1237",
+  chainName: "Robinhood Chain",
+  nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+  rpcUrls: ["https://rpc.mainnet.chain.robinhood.com"],
+  blockExplorerUrls: ["https://robinhoodchain.blockscout.com"],
+};
+
+function isPhantom(provider: Eip1193): boolean {
+  if (provider.isPhantom || providerKind === "phantom") return true;
+  const phantom = (window as unknown as { phantom?: { ethereum?: Eip1193 } }).phantom?.ethereum;
+  return phantom === provider;
+}
+
+async function chainIdOf(provider: Eip1193): Promise<string> {
+  return ((await provider.request({ method: "eth_chainId" })) as string).toLowerCase();
+}
+
+async function addRobinhood(provider: Eip1193) {
+  await provider.request({ method: "wallet_addEthereumChain", params: [robinhoodWalletChain] });
+}
+
 async function ensureRobinhood(provider: Eip1193) {
-  const current = (await provider.request({ method: "eth_chainId" })) as string;
-  if (current.toLowerCase() === "0x1237") return;
+  // Phantom simulates through its own service unless this RPC is registered. That simulation
+  // returns "Unexpected error" for launch even though the contract is fine on Robinhood Chain.
+  if (isPhantom(provider) || (await chainIdOf(provider)) !== "0x1237") {
+    try {
+      await addRobinhood(provider);
+    } catch (error) {
+      const code = (error as { code?: number }).code;
+      if (code === 4001 && (await chainIdOf(provider)) !== "0x1237") {
+        throw new Error("Add Robinhood Chain in the wallet to launch.");
+      }
+    }
+  }
+  if ((await chainIdOf(provider)) === "0x1237") return;
   try {
     await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x1237" }] });
   } catch (error) {
     const code = (error as { code?: number }).code;
+    if (code === 4001) throw new Error("Switch the wallet to Robinhood Chain to launch.");
     if (code !== 4902) throw error;
-    await provider.request({
-      method: "wallet_addEthereumChain",
-      params: [
-        {
-          chainId: "0x1237",
-          chainName: "Robinhood Chain",
-          nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
-          rpcUrls: ["https://rpc.mainnet.chain.robinhood.com"],
-          blockExplorerUrls: ["https://robinhoodchain.blockscout.com"],
-        },
-      ],
-    });
+    await addRobinhood(provider);
   }
 }
 
@@ -203,6 +230,45 @@ async function signer() {
   const [account] = await wallet.getAddresses();
   if (!account) throw new Error("The wallet did not return an account.");
   return { wallet, account, client: publicClient() };
+}
+
+async function writeRobinhood(
+  wallet: Awaited<ReturnType<typeof signer>>["wallet"],
+  account: Address,
+  client: ReturnType<typeof publicClient>,
+  parameters: {
+    address: Address;
+    abi: readonly unknown[];
+    functionName: string;
+    args?: readonly unknown[];
+    value?: bigint;
+  },
+): Promise<Hex> {
+  const data = encodeFunctionData({
+    abi: parameters.abi,
+    functionName: parameters.functionName,
+    args: parameters.args,
+  } as never);
+  const gas = await client.estimateGas({
+    account,
+    to: parameters.address,
+    data,
+    value: parameters.value,
+  });
+  const fees = await client.estimateFeesPerGas();
+  const nonce = await client.getTransactionCount({ address: account, blockTag: "pending" });
+  return wallet.sendTransaction({
+    account,
+    chain: robinhood,
+    to: parameters.address,
+    data,
+    value: parameters.value,
+    gas: (gas * 13n) / 10n,
+    nonce,
+    maxFeePerGas: fees.maxFeePerGas,
+    maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
+    type: "eip1559",
+  });
 }
 
 async function send(
@@ -282,14 +348,12 @@ export async function deployRobinhoodToken(input: {
   );
   const launched = await send(
     () =>
-      wallet.writeContract({
+      writeRobinhood(wallet, account, client, {
         address: launcher,
         abi: FEEZE_LAUNCHER_ABI,
         functionName: "launch",
         args: [input.name, input.symbol],
         value: liquidity,
-        account,
-        chain: robinhood,
       }),
     client,
   );
@@ -336,7 +400,7 @@ export async function swapOnRobinhood(input: {
     input.onStatus("Confirm the buy.");
     const bought = await send(
       () =>
-        wallet.writeContract({
+        writeRobinhood(wallet, account, client, {
           address: SWAP_ROUTER,
           abi: routerAbi,
           functionName: "multicall",
@@ -361,8 +425,6 @@ export async function swapOnRobinhood(input: {
             ],
           ],
           value: amountIn,
-          account,
-          chain: robinhood,
         }),
       client,
     );
@@ -378,13 +440,11 @@ export async function swapOnRobinhood(input: {
     input.onStatus("Confirm the token approval.");
     await send(
       () =>
-        wallet.writeContract({
+        writeRobinhood(wallet, account, client, {
           address: input.token,
           abi: erc20Abi,
           functionName: "approve",
           args: [SWAP_ROUTER, amountIn],
-          account,
-          chain: robinhood,
         }),
       client,
     );
@@ -392,7 +452,7 @@ export async function swapOnRobinhood(input: {
   input.onStatus("Confirm the sell.");
   const sold = await send(
     () =>
-      wallet.writeContract({
+      writeRobinhood(wallet, account, client, {
         address: SWAP_ROUTER,
         abi: routerAbi,
         functionName: "multicall",
@@ -421,8 +481,6 @@ export async function swapOnRobinhood(input: {
             }),
           ],
         ],
-        account,
-        chain: robinhood,
       }),
     client,
   );
@@ -444,13 +502,11 @@ export async function deployFeezeCurve(input: {
   input.onStatus("Confirm the launch. It costs gas only. The supply stays on the curve.");
   const launched = await send(
     () =>
-      wallet.writeContract({
+      writeRobinhood(wallet, account, client, {
         address: factory,
         abi: FEEZE_CURVE_ABI,
         functionName: "launch",
         args: [input.name, input.symbol, BigInt(input.creatorTaxBps)],
-        account,
-        chain: robinhood,
       }),
     client,
   );
@@ -509,14 +565,12 @@ export async function tradeOnCurve(input: {
     input.onStatus("Confirm the buy.");
     const bought = await send(
       () =>
-        wallet.writeContract({
+        writeRobinhood(wallet, account, client, {
           address: input.curve,
           abi: FEEZE_CURVE_ABI,
           functionName: "buy",
           args: [minOut],
           value: amountIn,
-          account,
-          chain: robinhood,
         }),
       client,
     );
@@ -540,13 +594,11 @@ export async function tradeOnCurve(input: {
     input.onStatus("Confirm the token approval, then the sell.");
     await send(
       () =>
-        wallet.writeContract({
+        writeRobinhood(wallet, account, client, {
           address: state.token,
           abi: erc20Abi,
           functionName: "approve",
           args: [input.curve, amountIn],
-          account,
-          chain: robinhood,
         }),
       client,
     );
@@ -554,13 +606,11 @@ export async function tradeOnCurve(input: {
   input.onStatus("Confirm the sell.");
   const sold = await send(
     () =>
-      wallet.writeContract({
+      writeRobinhood(wallet, account, client, {
         address: input.curve,
         abi: FEEZE_CURVE_ABI,
         functionName: "sell",
         args: [amountIn, minOut],
-        account,
-        chain: robinhood,
       }),
     client,
   );

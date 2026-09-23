@@ -68,7 +68,7 @@ function WalletBridge() {
     connected
       .getEthereumProvider()
       .then((provider) => {
-        if (!stop) setChainProvider(provider);
+        if (!stop) setChainProvider(provider, connected.walletClientType);
       })
       .catch(() => {
         if (!stop) setChainProvider(null);
