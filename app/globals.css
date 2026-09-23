@@ -265,8 +265,6 @@ label.lbl { display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
 .foot { border-top: 1px solid var(--line); padding: 22px 0 28px; color: var(--faint); display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 13px; }
 .foot nav { display: flex; gap: 14px; }
 .boot { min-height: 100vh; display: grid; place-items: center; letter-spacing: 0.08em; color: var(--muted); }
-.clock { display: flex; gap: 6px; flex-wrap: wrap; padding: 8px; }
-.clock button { border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--muted); padding: 6px 8px; font-size: 12px; }
 .check { display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 13px; padding: 6px; }
 .docs { display: grid; grid-template-columns: 220px 1fr; gap: 28px; }
 .docs aside a { display: block; color: var(--muted); padding: 6px 0; font-size: 14px; }

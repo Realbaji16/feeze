@@ -15,7 +15,7 @@ const LINKS = [
 ];
 
 export function Shell({ children }: { children: React.ReactNode }) {
-  const { ready, state, toast, dismiss, reset, advance, toggleFailGraduation } = useYeeld();
+  const { ready, state, toast, dismiss, reset, toggleFailGraduation } = useYeeld();
   const path = usePathname();
   const router = useRouter();
   const [more, setMore] = useState(false);
@@ -97,16 +97,6 @@ export function Shell({ children }: { children: React.ReactNode }) {
             </button>
             {sim && (
               <div className="drawer">
-                <div className="note" style={{ padding: 8 }}>
-                  Local clock {new Date(state.now).toLocaleString()}. Advance it to mature locks and tranches.
-                </div>
-                <div className="clock">
-                  <button onClick={() => advance(60 * 60 * 1000)}>+1h</button>
-                  <button onClick={() => advance(6 * 60 * 60 * 1000)}>+6h</button>
-                  <button onClick={() => advance(24 * 60 * 60 * 1000)}>+1d</button>
-                  <button onClick={() => advance(7 * 24 * 60 * 60 * 1000)}>+7d</button>
-                  <button onClick={() => advance(30 * 24 * 60 * 60 * 1000)}>+30d</button>
-                </div>
                 <label className="check">
                   <input type="checkbox" checked={state.failNextGraduation} onChange={toggleFailGraduation} />
                   Fail the next v4 seed
