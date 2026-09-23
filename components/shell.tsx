@@ -78,8 +78,6 @@ export function Shell({ children }: { children: React.ReactNode }) {
               </button>
               {more && (
                 <div className="menu-pop" onMouseLeave={() => setMore(false)}>
-                  <Link href="/buyback" onClick={() => setMore(false)}>Buyback</Link>
-                  <Link href="/revenue" onClick={() => setMore(false)}>Revenue</Link>
                   <Link href="/docs" onClick={() => setMore(false)}>Docs</Link>
                   <Link href="/profile" onClick={() => setMore(false)}>Profile</Link>
                 </div>
@@ -100,7 +98,6 @@ export function Shell({ children }: { children: React.ReactNode }) {
         <div className="wrap foot">
           <span>© 2026 FEEZE · local protocol simulator · chain model 4663</span>
           <nav>
-            <Link href="/revenue">Revenue</Link>
             <Link href="/">Markets</Link>
             <Link href="/lock">Lock & Earn</Link>
             <Link href="/docs">Docs</Link>
