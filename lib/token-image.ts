@@ -86,14 +86,54 @@ export async function putTokenImage(address: string, image: string): Promise<"sa
   return "saved";
 }
 
-export async function probeImageStore(): Promise<{ match: boolean; len: number; error?: string }> {
-  const address = `0x${"11".repeat(20)}`;
-  const image = `data:image/jpeg;base64,${"A".repeat(2500)}`;
-  try {
-    await putTokenImage(address, image);
-    const back = await readTokenImage(address);
-    return { match: back === image, len: back?.length ?? 0 };
-  } catch (error) {
-    return { match: false, len: 0, error: error instanceof Error ? error.message : "probe failed" };
+async function postBytes(url: string, body: Buffer, type: string): Promise<{ status: number; text: string }> {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": type, "user-agent": "feeze" },
+    body: new Uint8Array(body),
+    cache: "no-store",
+  });
+  return { status: response.status, text: (await response.text()).slice(0, 180) };
+}
+
+export async function probeImageStore(): Promise<Record<string, string | number>> {
+  const out: Record<string, string | number> = {};
+  for (const size of [40, 120, 250, 500]) {
+    const value = "A".repeat(size);
+    const ok = await setValue(`feezeprobea${size}`, value);
+    out[`kv${size}`] = ok ? "ok" : "fail";
   }
+  const colon = await setValue("feezeprobecolon", "data:image");
+  out.colon = colon ? "ok" : "fail";
+
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  const boundary = "feezeprobe";
+  const multipart = Buffer.concat([
+    Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="t.png"\r\nContent-Type: image/png\r\n\r\n`,
+    ),
+    png,
+    Buffer.from(`\r\n--${boundary}--\r\n`),
+  ]);
+  try {
+    const telegraph = await postBytes("https://telegra.ph/upload", multipart, `multipart/form-data; boundary=${boundary}`);
+    out.telegraph = `${telegraph.status} ${telegraph.text}`;
+  } catch (error) {
+    out.telegraph = error instanceof Error ? error.message : "fail";
+  }
+  try {
+    const blob = await fetch("https://jsonblob.com/api/jsonBlob", {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ image: `data:image/png;base64,${"A".repeat(1500)}` }),
+      cache: "no-store",
+    });
+    out.jsonblob = `${blob.status} ${blob.headers.get("location") ?? ""} ${(await blob.text()).slice(0, 80)}`;
+  } catch (error) {
+    out.jsonblob = error instanceof Error ? error.message : "fail";
+  }
+  return out;
 }
