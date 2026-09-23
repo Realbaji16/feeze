@@ -1,10 +1,13 @@
-/** Shrink a launch image until it can be stored for every browser. */
-export function shrinkDataUrl(dataUrl: string): Promise<string> {
-  if (!dataUrl.startsWith("data:image")) return Promise.resolve(dataUrl);
+function byteSize(dataUrl: string): number {
+  const comma = dataUrl.indexOf(",");
+  if (comma < 0) return Number.POSITIVE_INFINITY;
+  return Math.floor(((dataUrl.length - comma - 1) * 3) / 4);
+}
+
+function drawDataUrl(dataUrl: string, size: number, quality: number): Promise<string> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
-      const size = 96;
       const canvas = document.createElement("canvas");
       canvas.width = size;
       canvas.height = size;
@@ -19,11 +22,24 @@ export function shrinkDataUrl(dataUrl: string): Promise<string> {
       const width = img.width * scale;
       const height = img.height * scale;
       ctx.drawImage(img, (size - width) / 2, (size - height) / 2, width, height);
-      resolve(canvas.toDataURL("image/jpeg", 0.55));
+      resolve(canvas.toDataURL("image/jpeg", quality));
     };
     img.onerror = () => reject(new Error("Could not read that image."));
     img.src = dataUrl;
   });
+}
+
+/** Shrink a launch image until it can be stored for every browser. */
+export async function shrinkDataUrl(dataUrl: string): Promise<string> {
+  if (!dataUrl.startsWith("data:image")) return dataUrl;
+  let best = dataUrl;
+  for (const size of [64, 48, 32]) {
+    for (const quality of [0.5, 0.35, 0.22]) {
+      best = await drawDataUrl(dataUrl, size, quality);
+      if (byteSize(best) <= 900) return best;
+    }
+  }
+  return best;
 }
 
 export async function readSharedImage(address: string): Promise<string | null> {
@@ -45,7 +61,7 @@ export async function shareTokenImage(address: string, image: string): Promise<v
   sent.add(key);
   try {
     const small = await shrinkDataUrl(image);
-    if (!small.startsWith("data:image") || small.length > 30_000) {
+    if (!small.startsWith("data:image") || byteSize(small) > 900) {
       sent.delete(key);
       return;
     }

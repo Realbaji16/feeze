@@ -1,17 +1,10 @@
 const APP_KEY = "eoprd8iz";
-const CHUNK = 700;
+const CHUNK = 100;
+const MAX_BYTES = 900;
 
 function keyFor(address: string): string | null {
   const key = address.trim().toLowerCase();
   return /^0x[0-9a-f]{40}$/.test(key) ? key.slice(2) : null;
-}
-
-function pack(value: string): string {
-  return value.replaceAll("/", "_").replaceAll("+", "-").replaceAll("=", ".");
-}
-
-function unpack(value: string): string {
-  return value.replaceAll("_", "/").replaceAll("-", "+").replaceAll(".", "=");
 }
 
 function xmlValue(text: string): string {
@@ -38,12 +31,36 @@ async function getValue(key: string): Promise<string | null> {
   return value;
 }
 
-async function setValue(key: string, value: string): Promise<boolean> {
+async function setValue(key: string, value: string): Promise<void> {
   const response = await fetch(
     `https://keyvalue.immanuel.co/api/KeyVal/UpdateValue/${APP_KEY}/${encodeURIComponent(key)}/${encodeURIComponent(value)}`,
     { method: "POST", cache: "no-store" },
   );
-  return response.ok;
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`save ${response.status} ${text.slice(0, 80)}`);
+  }
+}
+
+function parseDataUrl(image: string): { mime: "png" | "jpg"; hex: string } | null {
+  const match = image.match(/^data:image\/(png|jpeg|jpg);base64,([A-Za-z0-9+/=\s]+)$/);
+  if (!match) return null;
+  const bytes = Buffer.from(match[2].replaceAll(/\s/g, ""), "base64");
+  if (bytes.length < 8 || bytes.length > MAX_BYTES) return null;
+  return { mime: match[1] === "png" ? "png" : "jpg", hex: bytes.toString("hex") };
+}
+
+async function eachChunk(count: number, run: (index: number) => Promise<void>): Promise<void> {
+  const width = 4;
+  let cursor = 0;
+  async function worker() {
+    while (cursor < count) {
+      const index = cursor;
+      cursor += 1;
+      await run(index);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(width, count) }, () => worker()));
 }
 
 export async function readTokenImage(address: string): Promise<string | null> {
@@ -51,89 +68,51 @@ export async function readTokenImage(address: string): Promise<string | null> {
   if (!key) return null;
   const count = Number(await getValue(`${key}n`));
   if (!Number.isInteger(count) || count < 1 || count > 40) return null;
-  let packed = "";
-  for (let index = 0; index < count; index++) {
-    const part = await getValue(`${key}p${index}`);
-    if (!part) return null;
-    packed += part;
-  }
-  const image = unpack(packed);
-  if (!image.startsWith("data:image") && !image.startsWith("https://")) return null;
-  return image;
+  const mime = await getValue(`${key}m`);
+  if (mime !== "png" && mime !== "jpg") return null;
+  const parts = new Array<string>(count);
+  await eachChunk(count, async (index) => {
+    const part = await getValue(`${key}h${index}`);
+    parts[index] = part ?? "";
+  });
+  const hex = parts.join("");
+  if (parts.some((part) => !part) || hex.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(hex)) return null;
+  const encoded = Buffer.from(hex, "hex").toString("base64");
+  return `data:image/${mime === "png" ? "png" : "jpeg"};base64,${encoded}`;
 }
 
 export async function putTokenImage(address: string, image: string): Promise<"saved" | "kept"> {
   const key = keyFor(address);
   if (!key) throw new Error("Image storage is not ready");
-  if (!image.startsWith("data:image")) throw new Error("Expected an image");
   const existing = await readTokenImage(address);
   if (existing) return "kept";
-  const packed = pack(image);
-  const count = Math.ceil(packed.length / CHUNK);
-  if (count < 1 || count > 40) throw new Error("Image is too large");
-  for (let index = 0; index < count; index++) {
-    const ok = await setValue(`${key}p${index}`, packed.slice(index * CHUNK, (index + 1) * CHUNK));
-    if (!ok) throw new Error(`Could not save image part ${index}`);
-  }
-  let check = "";
-  for (let index = 0; index < count; index++) {
-    const part = await getValue(`${key}p${index}`);
-    if (!part) throw new Error(`Image part ${index} missing`);
-    check += part;
-  }
-  if (unpack(check) !== image) throw new Error("Saved image did not match");
-  if (!(await setValue(`${key}n`, String(count)))) throw new Error("Could not save image");
+  const parsed = parseDataUrl(image);
+  if (!parsed) throw new Error(image.startsWith("data:image") ? "Image is too large" : "Expected an image");
+  const count = Math.ceil(parsed.hex.length / CHUNK);
+  await eachChunk(count, async (index) => {
+    await setValue(`${key}h${index}`, parsed.hex.slice(index * CHUNK, (index + 1) * CHUNK));
+  });
+  const back = new Array<string>(count);
+  await eachChunk(count, async (index) => {
+    back[index] = (await getValue(`${key}h${index}`)) ?? "";
+  });
+  if (back.join("") !== parsed.hex) throw new Error("Saved image did not match");
+  await setValue(`${key}m`, parsed.mime);
+  await setValue(`${key}n`, String(count));
   return "saved";
 }
 
-async function postBytes(url: string, body: Buffer, type: string): Promise<{ status: number; text: string }> {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": type, "user-agent": "feeze" },
-    body: new Uint8Array(body),
-    cache: "no-store",
-  });
-  return { status: response.status, text: (await response.text()).slice(0, 180) };
-}
-
-export async function probeImageStore(): Promise<Record<string, string | number>> {
-  const out: Record<string, string | number> = {};
-  for (const size of [40, 120, 250, 500]) {
-    const value = "A".repeat(size);
-    const ok = await setValue(`feezeprobea${size}`, value);
-    out[`kv${size}`] = ok ? "ok" : "fail";
-  }
-  const colon = await setValue("feezeprobecolon", "data:image");
-  out.colon = colon ? "ok" : "fail";
-
-  const png = Buffer.from(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
-    "base64",
-  );
-  const boundary = "feezeprobe";
-  const multipart = Buffer.concat([
-    Buffer.from(
-      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="t.png"\r\nContent-Type: image/png\r\n\r\n`,
-    ),
-    png,
-    Buffer.from(`\r\n--${boundary}--\r\n`),
-  ]);
+export async function probeImageStore(): Promise<{ match: boolean; len: number; result?: string; error?: string }> {
+  const address = `0x${"11".repeat(20)}`;
+  const bytes = Buffer.alloc(400, 7);
+  bytes[0] = 0xff;
+  bytes[1] = 0xd8;
+  const image = `data:image/jpeg;base64,${bytes.toString("base64")}`;
   try {
-    const telegraph = await postBytes("https://telegra.ph/upload", multipart, `multipart/form-data; boundary=${boundary}`);
-    out.telegraph = `${telegraph.status} ${telegraph.text}`;
+    const result = await putTokenImage(address, image);
+    const back = await readTokenImage(address);
+    return { result, match: back === image, len: back?.length ?? 0 };
   } catch (error) {
-    out.telegraph = error instanceof Error ? error.message : "fail";
+    return { match: false, len: 0, error: error instanceof Error ? error.message : "probe failed" };
   }
-  try {
-    const blob = await fetch("https://jsonblob.com/api/jsonBlob", {
-      method: "POST",
-      headers: { "content-type": "application/json", accept: "application/json" },
-      body: JSON.stringify({ image: `data:image/png;base64,${"A".repeat(1500)}` }),
-      cache: "no-store",
-    });
-    out.jsonblob = `${blob.status} ${blob.headers.get("location") ?? ""} ${(await blob.text()).slice(0, 80)}`;
-  } catch (error) {
-    out.jsonblob = error instanceof Error ? error.message : "fail";
-  }
-  return out;
 }
