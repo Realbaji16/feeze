@@ -15,11 +15,10 @@ const LINKS = [
 ];
 
 export function Shell({ children }: { children: React.ReactNode }) {
-  const { ready, state, toast, dismiss, reset, toggleFailGraduation } = useYeeld();
+  const { ready, state, toast, dismiss } = useYeeld();
   const path = usePathname();
   const router = useRouter();
   const [more, setMore] = useState(false);
-  const [sim, setSim] = useState(false);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -91,20 +90,6 @@ export function Shell({ children }: { children: React.ReactNode }) {
           <button className="search-btn" onClick={() => setOpen(true)}>
             Search… <kbd>⌘K</kbd>
           </button>
-          <div className="menu">
-            <button className="chain-pill" onClick={() => setSim((value) => !value)}>
-              <i /> 4663 · sim
-            </button>
-            {sim && (
-              <div className="drawer">
-                <label className="check">
-                  <input type="checkbox" checked={state.failNextGraduation} onChange={toggleFailGraduation} />
-                  Fail the next v4 seed
-                </label>
-                <button className="menu-item" onClick={reset}>Remove demo markets</button>
-              </div>
-            )}
-          </div>
           <ConnectButton />
         </div>
       </header>
