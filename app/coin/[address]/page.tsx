@@ -5,18 +5,14 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { formatEther, type Address } from "viem";
 import { useYeeld } from "@/lib/store";
-import { compact, formatDate, shortAddr, timeAgo, usd } from "@/lib/format";
+import { compact, formatDate, shortAddr, usd } from "@/lib/format";
 import {
-  activateBribe,
   assetKey,
   balanceOf,
   claimCreator,
-  depositBribe,
   graduate,
-  holdersOf,
   positionRewards,
   quoteTrade,
-  refundBribe,
   sweepOrphan,
   trade,
   GRACE_MS,
@@ -33,8 +29,6 @@ export default function CoinPage() {
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [amount, setAmount] = useState("0.1");
   const [slippage, setSlippage] = useState(100);
-  const [tab, setTab] = useState<"trades" | "holders" | "locks" | "bribes">("trades");
-  const [bribeAmt, setBribeAmt] = useState("0.1");
   const [chainBal, setChainBal] = useState<{ eth: number; token: number } | null>(null);
   const [chainOut, setChainOut] = useState<string | null>(null);
   const [chainNote, setChainNote] = useState<string | null>(null);
@@ -128,9 +122,7 @@ export default function CoinPage() {
     statsProgress: stats.progress,
   });
   const candles = buildCandles(market.trades);
-  const holders = holdersOf(state, market.address);
   const locks = state.locks.filter((lock) => lock.token === market.address && lock.kind === "reward");
-  const bribes = state.bribes.filter((bribe) => bribe.market === market.address);
 
   async function submit() {
     if (!wallet || !market) return;
@@ -206,82 +198,23 @@ export default function CoinPage() {
             )}
           </div>
           <div className="card">
-            <div className="tabs">
-              {(["trades", "holders", "locks", "bribes"] as const).map((key) => (
-                <button key={key} className={tab === key ? "on" : ""} onClick={() => setTab(key)}>{key}</button>
-              ))}
-            </div>
-            {tab === "trades" && (
-              <table className="table">
-                <tbody>
-                  {market.trades.map((row) => (
-                    <tr key={row.id}>
-                      <td className={row.side === "buy" ? "mono" : "mono"} style={{ color: row.side === "buy" ? "var(--green)" : "var(--red)" }}>{row.side}</td>
-                      <td className="mono">{compact(row.tokenAmount)} {market.symbol}</td>
-                      <td className="mono">{compact(row.quoteGross, 4)} {stats.pair.symbol}</td>
-                      <td className="faint">{timeAgo(row.time, state.now)} · {row.venue}</td>
+            <table className="table">
+              <tbody>
+                {locks.map((lock) => {
+                  const earned = positionRewards(state, lock);
+                  const reward = Object.values(earned).reduce((sum, value) => sum + value, 0);
+                  return (
+                    <tr key={lock.id}>
+                      <td className="mono">{shortAddr(lock.owner)}</td>
+                      <td className="mono">{compact(lock.amount)} · {lock.multiplier}×</td>
+                      <td className="faint">{lock.withdrawn ? "withdrawn" : formatDate(lock.expiry)}</td>
+                      <td className="right mono">{compact(reward, 4)} {stats.pair.symbol}</td>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-            {tab === "holders" && (
-              <table className="table">
-                <tbody>
-                  {holders.map((holder) => (
-                    <tr key={holder.account}>
-                      <td className="mono">{shortAddr(holder.account)}</td>
-                      <td className="right mono">{compact(holder.amount)}</td>
-                      <td className="right faint">{holder.locked > 0 ? `${compact(holder.locked)} locked` : ""}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-            {tab === "locks" && (
-              <table className="table">
-                <tbody>
-                  {locks.map((lock) => {
-                    const earned = positionRewards(state, lock);
-                    const reward = Object.values(earned).reduce((sum, value) => sum + value, 0);
-                    return (
-                      <tr key={lock.id}>
-                        <td className="mono">{shortAddr(lock.owner)}</td>
-                        <td className="mono">{compact(lock.amount)} · {lock.multiplier}×</td>
-                        <td className="faint">{lock.withdrawn ? "withdrawn" : formatDate(lock.expiry)}</td>
-                        <td className="right mono">{compact(reward, 4)} {stats.pair.symbol}</td>
-                      </tr>
-                    );
-                  })}
-                  {locks.length === 0 && <tr><td className="note">No reward locks yet.</td></tr>}
-                </tbody>
-              </table>
-            )}
-            {tab === "bribes" && (
-              <div className="stack">
-                {bribes.map((bribe) => (
-                  <div key={bribe.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
-                    <div>
-                      <strong className="mono">{compact(bribe.amount, 4)} {stats.pair.symbol}</strong>
-                      <div className="faint">{bribe.status} · {shortAddr(bribe.briber)}</div>
-                    </div>
-                    {wallet === bribe.briber && bribe.status === "pending" && (
-                      <div style={{ display: "flex", gap: 6 }}>
-                        <button className="btn" onClick={() => commit(activateBribe(state, { briber: wallet, bribeId: bribe.id }))}>Activate</button>
-                        <button className="btn" disabled={state.now < bribe.createdAt + GRACE_MS} onClick={() => commit(refundBribe(state, { briber: wallet, bribeId: bribe.id }))}>Refund</button>
-                      </div>
-                    )}
-                  </div>
-                ))}
-                <label className="lbl">
-                  Deposit bribe ({stats.pair.symbol})
-                  <input className="field" value={bribeAmt} onChange={(event) => setBribeAmt(event.target.value)} />
-                </label>
-                <button className="btn" disabled={!wallet} onClick={() => wallet && commit(depositBribe(state, { briber: wallet, market: market.address, amount: Number(bribeAmt) }))}>
-                  Deposit bribe
-                </button>
-              </div>
-            )}
+                  );
+                })}
+                {locks.length === 0 && <tr><td className="note">No reward locks yet.</td></tr>}
+              </tbody>
+            </table>
           </div>
         </div>
         <div className="stack">
