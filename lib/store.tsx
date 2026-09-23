@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { readChainMarkets } from "./chain-markets";
 import { PAIRS } from "./pairs";
+import { shareTokenImage } from "./share-image";
 import { advanceTime, asAddress, clone, emptyState, fundSimulator } from "./protocol";
 import type { ActionResult, Market, ProtocolState } from "./types";
 
@@ -76,7 +77,15 @@ function mergeChainMarkets(state: ProtocolState, incoming: Market[]): ProtocolSt
   const byAddress = new Map(state.markets.map((market) => [market.address, market]));
   let added = false;
   for (const market of incoming) {
-    if (RETIRED_MARKETS.has(market.address.toLowerCase()) || byAddress.has(market.address)) continue;
+    if (RETIRED_MARKETS.has(market.address.toLowerCase())) continue;
+    const existing = byAddress.get(market.address);
+    if (existing) {
+      if (!existing.image && market.image) {
+        byAddress.set(market.address, { ...existing, image: market.image });
+        added = true;
+      }
+      continue;
+    }
     byAddress.set(market.address, market);
     added = true;
   }
@@ -163,6 +172,36 @@ export function YeeldProvider({ children }: { children: React.ReactNode }) {
       stop = true;
     };
   }, [ready]);
+
+  useEffect(() => {
+    if (!ready) return;
+    let stop = false;
+    for (const market of state.markets) {
+      if (!market.onchain) continue;
+      if (market.image?.startsWith("data:")) {
+        void shareTokenImage(market.address, market.image);
+        continue;
+      }
+      if (market.image) continue;
+      void fetch(`/api/image?address=${market.address}`, { cache: "no-store" })
+        .then((response) => (response.ok ? response.json() : null))
+        .then((body: { image?: string | null } | null) => {
+          if (stop || !body?.image) return;
+          setState((current) => {
+            const match = current.markets.find((item) => item.address === market.address);
+            if (!match || match.image) return current;
+            return {
+              ...current,
+              markets: current.markets.map((item) => (item.address === market.address ? { ...item, image: body.image! } : item)),
+            };
+          });
+        })
+        .catch(() => undefined);
+    }
+    return () => {
+      stop = true;
+    };
+  }, [ready, state.markets]);
 
   useEffect(() => {
     if (!ready) return;

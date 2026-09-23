@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { createPublicClient, formatEther, http } from "viem";
 import { useYeeld } from "@/lib/store";
 import { PAIRS, type Pair } from "@/lib/pairs";
+import { shareTokenImage } from "@/lib/share-image";
 import { compact, usd } from "@/lib/format";
 import { launch, PONS_PHANTOM_ETH, START_MARKET_CAP_USD } from "@/lib/protocol";
 import { robinhood } from "@/lib/chain";
@@ -124,6 +125,7 @@ export default function LaunchPage() {
         setStatus(`${result.error} The contract is already live at ${deployed.token}.`);
         return;
       }
+      if (image) void shareTokenImage(result.value.address, image);
       router.push(`/coin/${result.value.address}`);
     } catch (error) {
       setStatus(explainTx(error));

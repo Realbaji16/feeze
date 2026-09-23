@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { CANONICAL_LAUNCHER, readChainMarkets } from "@/lib/chain-markets";
+import { readTokenImage } from "@/lib/token-image";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -30,7 +31,14 @@ export async function GET(request: Request) {
   }
   try {
     const markets = await readChainMarkets(extra.split(",").filter(Boolean));
-    return NextResponse.json(markets, { headers: { "cache-control": "no-store" } });
+    const withImages = await Promise.all(
+      markets.map(async (market) => {
+        if (market.image) return market;
+        const image = await readTokenImage(market.address);
+        return image ? { ...market, image } : market;
+      }),
+    );
+    return NextResponse.json(withImages, { headers: { "cache-control": "no-store" } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "launch index failed";
     return NextResponse.json([], { headers: { "cache-control": "no-store", "x-feeze-error": message } });
