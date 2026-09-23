@@ -37,11 +37,19 @@ export async function shareTokenImage(address: string, image: string): Promise<v
   const key = address.toLowerCase();
   if (sent.has(key) || !image.startsWith("data:image")) return;
   sent.add(key);
-  const small = await shrinkDataUrl(image);
-  if (small.length > 15_000) return;
-  await fetch("/api/image", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ address: key, image: small }),
-  });
+  try {
+    const small = await shrinkDataUrl(image);
+    if (small.length > 15_000) {
+      sent.delete(key);
+      return;
+    }
+    const response = await fetch("/api/image", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ address: key, image: small }),
+    });
+    if (!response.ok) sent.delete(key);
+  } catch {
+    sent.delete(key);
+  }
 }
