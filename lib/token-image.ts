@@ -16,7 +16,16 @@ function unpack(value: string): string {
 
 function xmlValue(text: string): string {
   const match = text.match(/<string[^>]*>([\s\S]*?)<\/string>/);
-  return (match ? match[1] : text).replaceAll("&amp;", "&").replaceAll("&lt;", "<").replaceAll("&gt;", ">").trim();
+  let value = (match ? match[1] : text).replaceAll("&amp;", "&").replaceAll("&lt;", "<").replaceAll("&gt;", ">").trim();
+  if (value.startsWith("\"") && value.endsWith("\"")) {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      if (typeof parsed === "string") value = parsed;
+    } catch {
+      value = value.slice(1, -1);
+    }
+  }
+  return value;
 }
 
 async function getValue(key: string): Promise<string | null> {
