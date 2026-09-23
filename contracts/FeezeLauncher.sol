@@ -45,6 +45,9 @@ contract FeezeLauncher {
     address public constant LOCKED = 0x000000000000000000000000000000000000dEaD;
     uint256 public constant SUPPLY = 1_000_000_000 ether;
     uint256 public constant POOL_TOKENS = (SUPPLY * 80) / 100;
+    /// @dev Pons phantomQuote. Opening FDV is 1.68 ETH for a 1e9 supply, not the ETH deposited.
+    uint256 public constant PHANTOM_NUM = 168;
+    uint256 public constant PHANTOM_DEN = 100;
     uint24 public constant POOL_FEE = 10000;
     int24 public constant TICK_LOWER = -887200;
     int24 public constant TICK_UPPER = 887200;
@@ -59,11 +62,16 @@ contract FeezeLauncher {
         token = address(new FeezeToken(tokenName, tokenSymbol, SUPPLY, address(this)));
         pool = address(0);
         if (msg.value > 0) {
+            uint256 priceWei = (PHANTOM_NUM * 1 ether) / (PHANTOM_DEN * 1_000_000_000);
+            uint256 tokensForPool = (msg.value * 1e18) / priceWei;
+            if (tokensForPool > POOL_TOKENS) tokensForPool = POOL_TOKENS;
+            require(tokensForPool > 0, "liquidity");
+            require(FeezeToken(token).transfer(msg.sender, SUPPLY - POOL_TOKENS), "creator");
             (address token0, address token1) = token < WETH ? (token, WETH) : (WETH, token);
-            uint256 amount0 = token0 == token ? POOL_TOKENS : msg.value;
-            uint256 amount1 = token0 == token ? msg.value : POOL_TOKENS;
-            uint160 sqrtPriceX96 = priceX96(amount1, amount0);
-            require(FeezeToken(token).approve(POSITION_MANAGER, POOL_TOKENS), "approve");
+            uint160 sqrtPriceX96 = token0 == token ? priceX96(priceWei, 1e18) : priceX96(1e18, priceWei);
+            uint256 amount0 = token0 == token ? tokensForPool : msg.value;
+            uint256 amount1 = token0 == token ? msg.value : tokensForPool;
+            require(FeezeToken(token).approve(POSITION_MANAGER, tokensForPool), "approve");
             bytes[] memory calls = new bytes[](3);
             calls[0] = abi.encodeCall(
                 IPositionManager.createAndInitializePoolIfNecessary, (token0, token1, POOL_FEE, sqrtPriceX96)
@@ -91,8 +99,10 @@ contract FeezeLauncher {
             pool = IUniswapFactory(FACTORY).getPool(token, WETH, POOL_FEE);
             require(pool != address(0), "pool");
         }
-        uint256 left = FeezeToken(token).balanceOf(address(this));
-        if (left > 0) require(FeezeToken(token).transfer(msg.sender, left), "transfer");
+        if (pool == address(0)) {
+            uint256 left = FeezeToken(token).balanceOf(address(this));
+            if (left > 0) require(FeezeToken(token).transfer(msg.sender, left), "transfer");
+        }
         if (address(this).balance > 0) {
             (bool ok,) = msg.sender.call{value: address(this).balance}("");
             require(ok, "refund");

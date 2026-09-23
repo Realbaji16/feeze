@@ -22,6 +22,8 @@ import {
   GRACE_MS,
 } from "@/lib/protocol";
 import { PhasePill, Progress, TokenMark, marketStats } from "@/components/bits";
+import { dexChartUrl, listedMarket, readDexPool, type DexQuote } from "@/lib/dex";
+import { GRADUATION_MARKET_CAP_USD, PONS_GRADUATION_ETH } from "@/lib/protocol";
 import { dexScreener, explainTx, quoteSwap, readHoldings, swapOnRobinhood, tokenExplorer, txExplorer } from "@/lib/robinhood-market";
 
 export default function CoinPage() {
@@ -37,6 +39,7 @@ export default function CoinPage() {
   const [chainOut, setChainOut] = useState<string | null>(null);
   const [chainNote, setChainNote] = useState<string | null>(null);
   const [chainBusy, setChainBusy] = useState(false);
+  const [dex, setDex] = useState<DexQuote | null>(null);
 
   const stats = market ? marketStats(market) : null;
   const wallet = state.wallet;
@@ -80,6 +83,27 @@ export default function CoinPage() {
     };
   }, [market?.onchain, market?.poolAddress, market?.address, side, amount, numeric]);
 
+  useEffect(() => {
+    if (!market?.poolAddress) {
+      setDex(null);
+      return;
+    }
+    let stop = false;
+    const load = () => {
+      readDexPool(market.poolAddress!)
+        .then((quote) => {
+          if (!stop && quote) setDex(quote);
+        })
+        .catch(() => undefined);
+    };
+    load();
+    const id = window.setInterval(load, 20_000);
+    return () => {
+      stop = true;
+      window.clearInterval(id);
+    };
+  }, [market?.poolAddress]);
+
   if (!market || !stats) {
     return (
       <div className="card">
@@ -96,6 +120,13 @@ export default function CoinPage() {
     : wallet
       ? (side === "buy" ? balanceOf(state, wallet, spendAsset) : balanceOf(state, wallet, market.address))
       : 0;
+  const listed = listedMarket({
+    onchain,
+    phase: market.phase,
+    quote: dex ?? undefined,
+    statsMcap: stats.mcap,
+    statsProgress: stats.progress,
+  });
   const candles = buildCandles(market.trades);
   const holders = holdersOf(state, market.address);
   const locks = state.locks.filter((lock) => lock.token === market.address && lock.kind === "reward");
@@ -132,7 +163,7 @@ export default function CoinPage() {
         <div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <h1 className="page-title" style={{ fontSize: 36 }}>{market.name}</h1>
-            <PhasePill phase={market.phase} />
+            <PhasePill phase={listed.phase} />
           </div>
           <div className="coin-meta">
             <span>{market.symbol} / {stats.pair.symbol}</span>
@@ -150,19 +181,29 @@ export default function CoinPage() {
       </div>
       {market.description && <p className="sub">{market.description}</p>}
       <div className="grid-3">
-        <div className="stat"><span>Price</span><b>{compact(stats.price, 6)} {stats.pair.symbol}</b></div>
-        <div className="stat"><span>Market cap</span><b>{usd(stats.mcap)}</b></div>
-        <div className="stat"><span>Volume</span><b>{usd(market.volumeQuote * stats.pair.usd)}</b></div>
+        <div className="stat"><span>Price</span><b>{dex ? usd(dex.priceUsd) : `${compact(stats.price, 6)} ${stats.pair.symbol}`}</b></div>
+        <div className="stat"><span>Market cap</span><b>{usd(listed.mcap)}</b></div>
+        <div className="stat"><span>Volume</span><b>{usd(dex ? dex.volume24h : market.volumeQuote * stats.pair.usd)}</b></div>
       </div>
       <div className="grid-2">
         <div className="stack">
           <div className="card">
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-              <strong>{market.phase === "graduated" ? "v4 pool" : "Bonding curve"}</strong>
-              <span className="mono faint">{Math.round(stats.progress * 100)}% to target</span>
+              <strong>{onchain ? "DexScreener" : listed.phase === "graduated" ? "v4 pool" : "Bonding curve"}</strong>
+              <span className="mono faint">
+                {listed.graduated
+                  ? "Graduated"
+                  : onchain
+                    ? `${Math.round(listed.progress * 100)}% to ${PONS_GRADUATION_ETH} ETH · ${usd(GRADUATION_MARKET_CAP_USD)}`
+                    : `${Math.round(listed.progress * 100)}% to target`}
+              </span>
             </div>
-            <Progress value={stats.progress} graduated={market.phase === "graduated"} />
-            <CandleChart candles={candles} />
+            <Progress value={listed.progress} graduated={listed.graduated} />
+            {market.poolAddress ? (
+              <iframe className="dex-frame" title={`${market.symbol} chart`} src={dexChartUrl(market.poolAddress)} />
+            ) : (
+              <CandleChart candles={candles} />
+            )}
           </div>
           <div className="card">
             <div className="tabs">

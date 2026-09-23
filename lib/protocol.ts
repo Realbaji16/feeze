@@ -13,6 +13,16 @@ import type {
 } from "./types";
 
 export const TOTAL_SUPPLY = 1_000_000_000;
+/** Pons ETH curve, read from the factory: virtual reserve and real ETH that closes it. */
+export const PONS_PHANTOM_ETH = 1.68;
+export const PONS_GRADUATION_ETH = 4.2;
+const ETH_USD = PAIRS.find((pair) => pair.symbol === "ETH")?.usd ?? 0;
+/** Opening market cap. Pons prices 1e9 tokens against 1.68 virtual ETH. */
+export const START_MARKET_CAP_USD = PONS_PHANTOM_ETH * ETH_USD;
+/** Market cap at graduation, in ETH. (phantom + 4.2)² / phantom = 20.58 ETH. */
+export const GRADUATION_FDV_ETH = (PONS_PHANTOM_ETH + PONS_GRADUATION_ETH) ** 2 / PONS_PHANTOM_ETH;
+/** Same cap in dollars at the app's ETH price. 20.58 ETH × $2,748 = $56,554. */
+export const GRADUATION_MARKET_CAP_USD = GRADUATION_FDV_ETH * ETH_USD;
 /** Curve inventory. The complement seeds the locked v4 position at the final curve price. */
 export const CURVE_TOKENS = (TOTAL_SUPPLY * 11) / 12;
 export const LP_TOKENS = TOTAL_SUPPLY - CURVE_TOKENS;
@@ -493,7 +503,7 @@ export function launch(state: ProtocolState, input: LaunchInput): ActionResult<M
     isProtocol: false,
     launchedAt: next.now,
     tx: input.chainTx ?? txHash(`launch:${address}`),
-    phase: input.onchain && input.poolAddress ? "graduated" : "curve",
+    phase: "curve",
     onchain: input.onchain,
     poolAddress: input.poolAddress,
     realTokens: CURVE_TOKENS,
@@ -515,9 +525,15 @@ export function launch(state: ProtocolState, input: LaunchInput): ActionResult<M
     lastTradeAt: null,
     volumeQuote: 0,
   };
-  next.markets.unshift(market);
+    next.markets.unshift(market);
   pushActivity(next, `${symbol} launched against ${pair.symbol}`, `/coin/${address}`);
-  if (input.onchain) return { ok: true, state: next, value: market };
+  if (input.onchain) {
+    if (input.poolAddress && pair.usd > 0) {
+      market.poolTokens = TOTAL_SUPPLY;
+      market.poolQuote = START_MARKET_CAP_USD / pair.usd;
+    }
+    return { ok: true, state: next, value: market };
+  }
   if (input.initialBuy && input.initialBuy > 0) {
     const bought = trade(next, {
       trader: input.creator,

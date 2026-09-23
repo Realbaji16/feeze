@@ -186,7 +186,7 @@ async function send(
   return receipt;
 }
 
-const LAUNCHER_KEY = "feeze.launcher.v1";
+const LAUNCHER_KEY = "feeze.launcher.v3";
 
 function launchedFrom(receipt: TransactionReceipt): { token: Address; pool: Address | null } {
   for (const log of receipt.logs) {

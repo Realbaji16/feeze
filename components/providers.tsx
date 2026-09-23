@@ -11,7 +11,7 @@ const privyConfig: PrivyClientConfig = {
   loginMethods: ["wallet", "email", "google", "twitter"],
   appearance: {
     theme: "dark" as const,
-    accentColor: "#dff25a" as const,
+    accentColor: "#22A3FF" as const,
     landingHeader: "Connect a wallet",
     loginMessage: "Use an external wallet, or email to create one.",
     showWalletLoginFirst: true,

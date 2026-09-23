@@ -64,7 +64,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
       <header className="top">
         <div className="wrap top-inner">
           <Link href="/" className="brand">
-            <span className="mark">F</span> FEEZE
+            <img src="/logo.png?v=2" alt="" width={36} height={31} className="mark" />
+            FEEZE
           </Link>
           <nav className="nav">
             {LINKS.map((link) => (
@@ -110,7 +111,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
                   <input type="checkbox" checked={state.failNextGraduation} onChange={toggleFailGraduation} />
                   Fail the next v4 seed
                 </label>
-                <button className="menu-item" onClick={reset}>Reset simulator</button>
+                <button className="menu-item" onClick={reset}>Remove demo markets</button>
               </div>
             )}
           </div>

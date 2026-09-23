@@ -1,11 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useYeeld } from "@/lib/store";
 import { PAIRS } from "@/lib/pairs";
 import { compact, timeAgo, usd } from "@/lib/format";
 import { PhasePill, Progress, TokenMark, marketStats } from "@/components/bits";
+import { listedMarket, readDexPool, type DexQuote } from "@/lib/dex";
 import type { Market } from "@/lib/types";
 
 type SortKey = "market_cap" | "recent" | "last_trade";
@@ -16,13 +17,49 @@ export default function MarketsPage() {
   const [pair, setPair] = useState("all");
   const [graduated, setGraduated] = useState<"all" | "live" | "done">("all");
   const [q, setQ] = useState("");
+  const [quotes, setQuotes] = useState<Record<string, DexQuote>>({});
+  const poolKey = state.markets.map((market) => market.poolAddress ?? "").join(",");
+
+  useEffect(() => {
+    const pools = state.markets.filter((market) => market.poolAddress);
+    if (!pools.length) return;
+    let stop = false;
+    Promise.all(
+      pools.map(async (market) => {
+        const quote = await readDexPool(market.poolAddress!);
+        return [market.address, quote] as const;
+      }),
+    )
+      .then((rows) => {
+        if (stop) return;
+        const next: Record<string, DexQuote> = {};
+        for (const [address, quote] of rows) {
+          if (quote) next[address] = quote;
+        }
+        setQuotes(next);
+      })
+      .catch(() => undefined);
+    return () => {
+      stop = true;
+    };
+  }, [poolKey, state.markets]);
 
   const rows = useMemo(() => {
     const query = q.trim().toLowerCase();
     let list = state.markets.filter((market) => {
       if (pair !== "all" && market.pair !== pair) return false;
-      if (graduated === "live" && market.phase === "graduated") return false;
-      if (graduated === "done" && market.phase !== "graduated") return false;
+      const stats = marketStats(market);
+      const phase = stats
+        ? listedMarket({
+            onchain: Boolean(market.onchain),
+            phase: market.phase,
+            quote: quotes[market.address],
+            statsMcap: stats.mcap,
+            statsProgress: stats.progress,
+          }).phase
+        : market.phase;
+      if (graduated === "live" && phase === "graduated") return false;
+      if (graduated === "done" && phase !== "graduated") return false;
       if (!query) return true;
       return (
         market.name.toLowerCase().includes(query) ||
@@ -30,28 +67,40 @@ export default function MarketsPage() {
         market.address.includes(query)
       );
     });
-    const cap = (market: Market) => marketStats(market)?.mcap ?? 0;
+    const cap = (market: Market) => quotes[market.address]?.marketCap ?? marketStats(market)?.mcap ?? 0;
     list = [...list].sort((a, b) => {
       if (sort === "recent") return b.launchedAt - a.launchedAt;
       if (sort === "last_trade") return (b.lastTradeAt ?? 0) - (a.lastTradeAt ?? 0);
       return cap(b) - cap(a);
     });
     return list;
-  }, [state.markets, sort, pair, graduated, q, state.now]);
+  }, [state.markets, sort, pair, graduated, q, state.now, quotes]);
 
   const volume = state.markets.reduce((sum, market) => {
+    const live = quotes[market.address];
+    if (live) return sum + live.volume24h;
     const stats = marketStats(market);
     return sum + (stats ? market.volumeQuote * stats.pair.usd : 0);
   }, 0);
-  const graduatedCount = state.markets.filter((market) => market.phase === "graduated").length;
+  const graduatedCount = state.markets.filter((market) => {
+    const stats = marketStats(market);
+    if (!stats) return market.phase === "graduated";
+    return listedMarket({
+      onchain: Boolean(market.onchain),
+      phase: market.phase,
+      quote: quotes[market.address],
+      statsMcap: stats.mcap,
+      statsProgress: stats.progress,
+    }).graduated;
+  }).length;
 
   return (
     <>
       <section className="hero">
         <div>
-          <h1>Launch coins that reward conviction.</h1>
+          <h1>A launchpad where fees freeze with the holders.</h1>
           <p className="lede">
-            Create and discover tokens anchored to real stocks. Lock your supply to capture 60% of all trading fees.
+            Turn trading volume into daily payouts. Lock your tokens to freeze 60% of all trading fees directly into your wallet every 24 hours.
           </p>
           <div className="hero-actions">
             <Link className="btn-accent" href="/launch">Launch token</Link>
@@ -91,6 +140,14 @@ export default function MarketsPage() {
         {rows.map((market) => {
           const stats = marketStats(market);
           if (!stats) return null;
+          const listed = listedMarket({
+            onchain: Boolean(market.onchain),
+            phase: market.phase,
+            quote: quotes[market.address],
+            statsMcap: stats.mcap,
+            statsProgress: stats.progress,
+          });
+          const live = quotes[market.address];
           return (
             <Link key={market.address} href={`/coin/${market.address}`} className="market-card">
               <div className="market-card-top">
@@ -102,21 +159,21 @@ export default function MarketsPage() {
                     {market.isProtocol ? " · protocol" : ""}
                   </em>
                 </div>
-                <PhasePill phase={market.phase} />
+                <PhasePill phase={listed.phase} />
               </div>
               <div className="market-card-cap">
                 <span>Market cap</span>
-                <b>{usd(stats.mcap)}</b>
+                <b>{usd(listed.mcap)}</b>
               </div>
               <div className="market-card-progress">
                 <div className="market-card-meta">
-                  <span>{Math.round(stats.progress * 100)}% of curve</span>
-                  <span>{compact(stats.price, 6)} {stats.pair.symbol}</span>
+                  <span>{market.onchain ? `${Math.round(listed.progress * 100)}% to graduation` : `${Math.round(listed.progress * 100)}% of curve`}</span>
+                  <span>{live ? usd(live.priceUsd) : `${compact(stats.price, 6)} ${stats.pair.symbol}`}</span>
                 </div>
-                <Progress value={stats.progress} graduated={market.phase === "graduated"} wide />
+                <Progress value={listed.progress} graduated={listed.graduated} wide />
               </div>
               <div className="market-card-foot">
-                <span>Vol {usd(market.volumeQuote * stats.pair.usd)}</span>
+                <span>Vol {usd(live ? live.volume24h : market.volumeQuote * stats.pair.usd)}</span>
                 <span>{timeAgo(market.launchedAt, state.now)}</span>
               </div>
             </Link>
