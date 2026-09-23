@@ -68,11 +68,6 @@ function keepTradeable(state: ProtocolState): ProtocolState {
   };
 }
 
-function savedAddresses(keys: string[]): string[] {
-  if (typeof localStorage === "undefined") return [];
-  return keys.map((key) => localStorage.getItem(key) ?? "").filter((value) => /^0x[0-9a-fA-F]{40}$/.test(value));
-}
-
 function mergeChainMarkets(state: ProtocolState, incoming: Market[]): ProtocolState {
   if (!incoming.length) return state;
   const byAddress = new Map(state.markets.map((market) => [market.address, market]));
@@ -174,26 +169,29 @@ export function YeeldProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!ready) return;
     let stop = false;
-    const extra = savedAddresses(["feeze.launcher.v1", "feeze.launcher.v2", "feeze.launcher.v3"]);
-    const curves = savedAddresses(["feeze.curve.v1"]);
     const apply = (markets: Market[]) => {
       if (stop || !markets.length) return;
       setState((current) => mergeChainMarkets(current, markets));
     };
-    fetch(`/api/launches?launchers=${extra.join(",")}&curves=${curves.join(",")}`, { cache: "no-store" })
-      .then((response) => (response.ok ? response.json() : []))
-      .then((markets: Market[]) => {
-        if (Array.isArray(markets) && markets.length) {
-          apply(markets);
-          return;
-        }
-        return readChainMarkets(extra, curves).then(apply);
-      })
-      .catch(() => {
-        readChainMarkets(extra, curves).then(apply).catch(() => undefined);
-      });
+    const load = () => {
+      fetch("/api/launches", { cache: "no-store" })
+        .then((response) => (response.ok ? response.json() : []))
+        .then((markets: Market[]) => {
+          if (Array.isArray(markets) && markets.length) {
+            apply(markets);
+            return;
+          }
+          return readChainMarkets().then(apply);
+        })
+        .catch(() => {
+          readChainMarkets().then(apply).catch(() => undefined);
+        });
+    };
+    load();
+    const id = window.setInterval(load, 15_000);
     return () => {
       stop = true;
+      window.clearInterval(id);
     };
   }, [ready]);
 

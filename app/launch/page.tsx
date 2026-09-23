@@ -142,7 +142,7 @@ export default function LaunchPage() {
       <div>
         <h1 className="page-title">Launch a token</h1>
         <p className="sub">
-          Launch sends one transaction on Robinhood Chain and costs gas only. The entire supply is minted to a bonding curve that opens at {PONS_PHANTOM_ETH} ETH ({usd(START_MARKET_CAP_USD)}), the same open as Pons. Buyers spend ETH from there. At {4.2} ETH raised, the curve locks a Uniswap pool. The first launch on this browser also installs the curve, which is one extra confirmation.
+          Launch sends one transaction on Robinhood Chain and costs gas only. The entire supply is minted to the shared bonding curve, the same factory for every browser, and opens at {PONS_PHANTOM_ETH} ETH ({usd(START_MARKET_CAP_USD)}). Buyers spend ETH from there. At 4.2 ETH raised, the curve locks a Uniswap pool. The token shows on Explore as soon as the transaction is on chain.
         </p>
         <div className="stack">
           <div className="launch-identity">
@@ -245,7 +245,7 @@ export default function LaunchPage() {
             <div><span>Quote</span><span>{selected.symbol}</span></div>
           </div>
           <p className="note" style={{ marginTop: 12 }}>
-            After the curve is installed, Launch is one wallet confirmation. Only gas leaves your wallet.
+            Launch is one wallet confirmation on the shared factory. Only gas leaves your wallet. Explore on every device reads that same factory.
           </p>
         </div>
         <div className="card">

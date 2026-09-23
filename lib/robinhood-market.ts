@@ -20,7 +20,7 @@ import { CANONICAL_CURVE, CANONICAL_LAUNCHER } from "./chain-markets";
 import { robinhood } from "./chain";
 import type { ChainTrade } from "./chain-activity";
 import { quoteCurveBuy, quoteCurveSell } from "./curve-math";
-import { FEEZE_CURVE_ABI, FEEZE_CURVE_FACTORY_BYTECODE } from "./feeze-curve";
+import { FEEZE_CURVE_ABI } from "./feeze-curve";
 import { FEEZE_LAUNCHER_ABI, FEEZE_LAUNCHER_BYTECODE } from "./feeze-launcher";
 
 export const WETH = getAddress("0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73");
@@ -429,41 +429,8 @@ export async function swapOnRobinhood(input: {
   return sold.transactionHash;
 }
 
-const CURVE_KEY = "feeze.curve.v1";
-
-async function ensureCurveFactory(
-  wallet: Awaited<ReturnType<typeof signer>>["wallet"],
-  account: Address,
-  client: ReturnType<typeof publicClient>,
-  onStatus: (message: string) => void,
-): Promise<Address> {
-  const shared = getAddress(CANONICAL_CURVE);
-  const sharedCode = await client.getBytecode({ address: shared });
-  if (sharedCode && sharedCode !== "0x") {
-    localStorage.setItem(CURVE_KEY, shared);
-    return shared;
-  }
-  const saved = typeof localStorage === "undefined" ? null : localStorage.getItem(CURVE_KEY);
-  if (saved && isAddress(saved)) {
-    const code = await client.getBytecode({ address: saved });
-    if (code && code !== "0x") return saved;
-  }
-  onStatus("First launch installs the curve. Confirm this once, then the token.");
-  const deployed = await send(
-    () =>
-      wallet.deployContract({
-        abi: FEEZE_CURVE_ABI,
-        bytecode: FEEZE_CURVE_FACTORY_BYTECODE,
-        account,
-        chain: robinhood,
-        args: [],
-      }),
-    client,
-  );
-  const factory = deployed.contractAddress;
-  if (!factory) throw new Error("The curve deploy did not return a contract address.");
-  localStorage.setItem(CURVE_KEY, factory);
-  return factory;
+async function ensureCurveFactory(): Promise<Address> {
+  return getAddress(CANONICAL_CURVE);
 }
 
 export async function deployFeezeCurve(input: {
@@ -473,7 +440,7 @@ export async function deployFeezeCurve(input: {
   onStatus: (message: string) => void;
 }): Promise<{ token: Address; curve: Address; tx: Hex }> {
   const { wallet, account, client } = await signer();
-  const factory = await ensureCurveFactory(wallet, account, client, input.onStatus);
+  const factory = await ensureCurveFactory();
   input.onStatus("Confirm the launch. It costs gas only. The supply stays on the curve.");
   const launched = await send(
     () =>
