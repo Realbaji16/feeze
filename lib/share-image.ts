@@ -1,5 +1,3 @@
-import { IMAGE_BUCKET } from "./token-image";
-
 /** Shrink a launch image until it can be stored for every browser. */
 export function shrinkDataUrl(dataUrl: string): Promise<string> {
   if (!dataUrl.startsWith("data:image")) return Promise.resolve(dataUrl);
@@ -29,18 +27,8 @@ export function shrinkDataUrl(dataUrl: string): Promise<string> {
 }
 
 export async function readSharedImage(address: string): Promise<string | null> {
-  const key = address.toLowerCase();
   try {
-    const direct = await fetch(`https://kvdb.io/${IMAGE_BUCKET}/${key}`, { cache: "no-store" });
-    if (direct.ok) {
-      const image = (await direct.text()).trim();
-      if (image.startsWith("data:image") || image.startsWith("https://")) return image;
-    }
-  } catch {
-    // The browser may not be allowed to read the store directly.
-  }
-  try {
-    const response = await fetch(`/api/image?address=${key}`, { cache: "no-store" });
+    const response = await fetch(`/api/image?address=${address.toLowerCase()}`, { cache: "no-store" });
     if (!response.ok) return null;
     const body = (await response.json()) as { image?: string | null };
     return body.image ?? null;
@@ -57,16 +45,10 @@ export async function shareTokenImage(address: string, image: string): Promise<v
   sent.add(key);
   try {
     const small = await shrinkDataUrl(image);
-    if (!small.startsWith("data:image") || small.length > 15_000) {
+    if (!small.startsWith("data:image") || small.length > 30_000) {
       sent.delete(key);
       return;
     }
-    const direct = await fetch(`https://kvdb.io/${IMAGE_BUCKET}/${key}?ttl=604800`, {
-      method: "POST",
-      cache: "no-store",
-      body: small,
-    }).catch(() => null);
-    if (direct?.ok) return;
     const response = await fetch("/api/image", {
       method: "POST",
       headers: { "content-type": "application/json" },
