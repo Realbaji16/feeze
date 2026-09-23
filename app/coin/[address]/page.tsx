@@ -23,7 +23,7 @@ import {
 import type { ChainHolder, ChainTrade } from "@/lib/chain-activity";
 import { PhasePill, Progress, TokenMark, marketStats } from "@/components/bits";
 import { dexChartUrl, listedMarket, readDexPool, type DexQuote } from "@/lib/dex";
-import { GRADUATION_MARKET_CAP_USD, PONS_GRADUATION_ETH } from "@/lib/protocol";
+import { GRADUATION_MARKET_CAP_USD, PONS_GRADUATION_ETH, PONS_PHANTOM_ETH } from "@/lib/protocol";
 import { dexScreener, explainTx, quoteSwap, readCurveState, readCurveTrades, readHoldings, readUniswapPool, swapOnRobinhood, tokenExplorer, tradeOnCurve, txExplorer } from "@/lib/robinhood-market";
 import { quoteCurveBuy, quoteCurveSell } from "@/lib/curve-math";
 
@@ -310,8 +310,8 @@ export default function CoinPage() {
             <Progress value={listed.progress} graduated={listed.graduated} />
             {market.poolAddress ? (
               <iframe className="dex-frame" title={`${market.symbol} chart`} src={dexChartUrl(market.poolAddress)} />
-            ) : market.curveAddress ? (
-              <CandleChart candles={buildCandles(chainTrades.flatMap((row) => (row.quoteAmount && row.tokenAmount ? [{ time: row.time, price: row.quoteAmount / row.tokenAmount }] : [])))} />
+            ) : market.curveAddress && stats ? (
+              <PriceChart points={curvePoints(market.launchedAt, stats.price, chainTrades)} />
             ) : onchain ? (
               <div className="chart note">This launch did not open a curve or a pool.</div>
             ) : (
@@ -517,6 +517,47 @@ function CopyCa({ address }: { address: string }) {
         </svg>
       )}
     </button>
+  );
+}
+
+function curvePoints(launchedAt: number, spot: number, trades: ChainTrade[]) {
+  const open = PONS_PHANTOM_ETH / 1_000_000_000;
+  const points = [{ time: launchedAt || Date.now() - 60_000, price: open }];
+  for (const row of [...trades].reverse()) {
+    if (!row.quoteAmount || !row.tokenAmount) continue;
+    points.push({ time: row.time, price: row.quoteAmount / row.tokenAmount });
+  }
+  const last = points[points.length - 1];
+  points.push({ time: Math.max(Date.now(), last.time + 1), price: spot });
+  return points;
+}
+
+function PriceChart({ points }: { points: { time: number; price: number }[] }) {
+  const prices = points.map((point) => point.price);
+  const max = Math.max(...prices);
+  const min = Math.min(...prices);
+  const pad = (max - min) * 0.35 || max * 0.2 || 1;
+  const top = max + pad;
+  const bottom = Math.max(0, min - pad);
+  const span = top - bottom || 1;
+  const width = 640;
+  const height = 260;
+  const start = points[0]?.time ?? 0;
+  const end = points[points.length - 1]?.time ?? start + 1;
+  const spanTime = Math.max(1, end - start);
+  const coords = points.map((point) => ({
+    x: 8 + ((point.time - start) / spanTime) * (width - 16),
+    y: 16 + ((top - point.price) / span) * (height - 32),
+  }));
+  const line = coords.map((point, index) => `${index === 0 ? "M" : "L"}${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(" ");
+  const area = `${line} L${coords[coords.length - 1].x.toFixed(2)},${height} L${coords[0].x.toFixed(2)},${height} Z`;
+  return (
+    <div className="chart">
+      <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
+        <path d={area} fill="rgba(34, 163, 255, 0.14)" />
+        <path d={line} fill="none" stroke="#22A3FF" strokeWidth="2.5" vectorEffect="non-scaling-stroke" />
+      </svg>
+    </div>
   );
 }
 
