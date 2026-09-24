@@ -22,6 +22,17 @@ import type { ChainTrade } from "./chain-activity";
 import { quoteCurveBuy, quoteCurveSell } from "./curve-math";
 import { FEEZE_CURVE_ABI } from "./feeze-curve";
 import { FEEZE_LAUNCHER_ABI, FEEZE_LAUNCHER_BYTECODE } from "./feeze-launcher";
+import {
+  PONS_CONFIG_ID,
+  PONS_CURVE_ABI,
+  PONS_FACTORY,
+  PONS_FACTORY_ABI,
+  PONS_LAUNCH_AND_BUY,
+  PONS_NATIVE,
+  PONS_ROUTER_ABI,
+  quotePonsBuy,
+  quotePonsSell,
+} from "./pons";
 
 export const WETH = getAddress("0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73");
 const SWAP_ROUTER = getAddress("0xCaf681a66D020601342297493863E78C959E5cb2");
@@ -359,6 +370,138 @@ export async function deployRobinhoodToken(input: {
   return { token: result.token, tx: launched.transactionHash, pool: result.pool };
 }
 
+function randomSalt(): Hex {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return `0x${[...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("")}` as Hex;
+}
+
+/** Launch through the public Pons v2 factory. The token starts on the Pons curve that bots already route. */
+export async function launchOnPons(input: {
+  name: string;
+  symbol: string;
+  logo: string;
+  description: string;
+  website: string;
+  twitter: string;
+  creatorTaxBps: number;
+  initialBuyEth: string;
+  slippageBps: number;
+  onStatus: (message: string) => void;
+}): Promise<{ token: Address; curve: Address; tx: Hex }> {
+  const { wallet, account, client } = await signer();
+  const read = <T,>(functionName: string, args: readonly unknown[] = []) =>
+    client.readContract({ address: PONS_FACTORY, abi: PONS_FACTORY_ABI, functionName, args } as never) as Promise<T>;
+  const [allowed, maxTax, fee, economics, config] = await Promise.all([
+    read<boolean>("canLaunch", [account]),
+    read<bigint>("maxCreatorTaxBps"),
+    read<bigint>("launchFee"),
+    read<Hex>("previewLaunchEconomics", [PONS_CONFIG_ID, PONS_NATIVE]),
+    read<{ supply: bigint; curveFeeBps: bigint; phantomQuote: bigint; enabled: boolean }>("getLaunchConfig", [PONS_CONFIG_ID]),
+  ]);
+  if (!allowed) throw new Error("Pons is not accepting launches from this wallet right now.");
+  if (!config.enabled) throw new Error("The Pons launch config is closed right now.");
+  const creatorTaxBps = BigInt(input.creatorTaxBps);
+  if (creatorTaxBps > maxTax) throw new Error(`Creator tax is capped at ${Number(maxTax) / 100}% on Pons.`);
+  const params = {
+    name: input.name,
+    symbol: input.symbol,
+    logo: input.logo,
+    description: input.description,
+    socials: { twitter: input.twitter, telegram: "", discord: "", website: input.website, farcaster: "" },
+    creatorFeeRecipient: account,
+    creatorTaxBps: input.creatorTaxBps,
+    buybackEnabled: false,
+    expectedEconomics: economics,
+    salt: randomSalt(),
+  };
+  const buy = input.initialBuyEth.trim() ? parseEther(input.initialBuyEth.trim()) : 0n;
+  let launched: TransactionReceipt;
+  if (buy > 0n) {
+    const quoted = quotePonsBuy({
+      quoteIn: buy,
+      quoteReserve: config.phantomQuote,
+      tokenReserve: config.supply,
+      sellable: config.supply,
+      feeBps: config.curveFeeBps,
+      creatorTaxBps,
+      snipeBps: 0n,
+    });
+    const slip = BigInt(Math.max(0, Math.min(5_000, input.slippageBps)));
+    const minTokensOut = (quoted.tokensOut * (10_000n - slip)) / 10_000n;
+    input.onStatus("Confirm the launch. It deploys on Pons and makes your first buy in the same transaction.");
+    launched = await send(
+      () =>
+        writeRobinhood(wallet, account, client, {
+          address: PONS_LAUNCH_AND_BUY,
+          abi: PONS_ROUTER_ABI,
+          functionName: "launchAndBuy",
+          args: [params, PONS_CONFIG_ID, PONS_NATIVE, buy, minTokensOut, account, []],
+          value: fee + buy,
+        }),
+      client,
+    );
+  } else {
+    input.onStatus("Confirm the launch on Pons.");
+    launched = await send(
+      () =>
+        writeRobinhood(wallet, account, client, {
+          address: PONS_FACTORY,
+          abi: PONS_FACTORY_ABI,
+          functionName: "launchToken",
+          args: [params, PONS_CONFIG_ID, PONS_NATIVE],
+          value: fee,
+        }),
+      client,
+    );
+  }
+  for (const log of launched.logs) {
+    if (log.address.toLowerCase() !== PONS_FACTORY.toLowerCase()) continue;
+    try {
+      const decoded = decodeEventLog({ abi: PONS_FACTORY_ABI, data: log.data, topics: log.topics });
+      if (decoded.eventName !== "TokenLaunched") continue;
+      return { token: decoded.args.token, curve: decoded.args.curve, tx: launched.transactionHash };
+    } catch {
+      // Other factory logs share this receipt.
+    }
+  }
+  throw new Error("The Pons launch did not return a token address.");
+}
+
+const ponsCurves = new Map<string, boolean>();
+
+/** Pons curves expose getReserves. The older Feeze curve does not. */
+async function isPonsCurve(curve: Address): Promise<boolean> {
+  const key = curve.toLowerCase();
+  const known = ponsCurves.get(key);
+  if (known !== undefined) return known;
+  let pons = false;
+  try {
+    await publicClient().readContract({ address: curve, abi: PONS_CURVE_ABI, functionName: "getReserves" });
+    pons = true;
+  } catch {
+    pons = false;
+  }
+  ponsCurves.set(key, pons);
+  return pons;
+}
+
+async function readPonsCurve(curve: Address) {
+  const client = publicClient();
+  const read = <T,>(functionName: string) =>
+    client.readContract({ address: curve, abi: PONS_CURVE_ABI, functionName } as never) as Promise<T>;
+  const [reserves, realQuote, tokenReserve, sellable, feeBps, creatorTaxBps, graduated, ready] = await Promise.all([
+    read<readonly [bigint, bigint]>("getReserves"),
+    read<bigint>("realQuoteReserve"),
+    read<bigint>("tokenReserve"),
+    read<bigint>("sellableTokens"),
+    read<bigint>("feeBps"),
+    read<bigint>("creatorTaxBps"),
+    read<boolean>("graduated"),
+    read<boolean>("readyToGraduate"),
+  ]);
+  return { quoteReserve: reserves[0], pricingTokens: reserves[1], realQuote, tokenReserve, sellable, feeBps, creatorTaxBps, graduated, ready };
+}
+
 export async function readHoldings(account: Address, token: Address) {
   const client = publicClient();
   const [eth, raw] = await Promise.all([
@@ -528,6 +671,17 @@ export async function readCurveState(curve: Address): Promise<{
   creatorTaxBps: bigint;
   token: Address;
 }> {
+  if (await isPonsCurve(curve)) {
+    const pons = await readPonsCurve(curve);
+    return {
+      realQuote: pons.realQuote,
+      tokenReserve: pons.pricingTokens,
+      pool: zeroAddress,
+      graduated: pons.graduated,
+      creatorTaxBps: pons.creatorTaxBps,
+      token: zeroAddress,
+    };
+  }
   const client = publicClient();
   const [realQuote, tokenReserve, pool, graduated, creatorTaxBps, token] = await Promise.all([
     client.readContract({ address: curve, abi: FEEZE_CURVE_ABI, functionName: "realQuote" }),
@@ -540,13 +694,104 @@ export async function readCurveState(curve: Address): Promise<{
   return { realQuote, tokenReserve, pool, graduated, creatorTaxBps, token };
 }
 
-export async function tradeOnCurve(input: {
+async function tradeOnPons(input: {
   curve: Address;
+  token: Address;
   side: "buy" | "sell";
   amount: string;
   slippageBps: number;
   onStatus: (message: string) => void;
 }): Promise<Hex> {
+  const { wallet, account, client } = await signer();
+  const amountIn = parseEther(input.amount);
+  const state = await readPonsCurve(input.curve);
+  if (state.graduated) throw new Error("This token graduated to Uniswap v4. Trade it on pons.family.");
+  const slip = BigInt(Math.max(0, Math.min(10_000, input.slippageBps)));
+  if (input.side === "buy") {
+    if (state.sellable <= 0n) throw new Error("The curve is full and graduating to Uniswap v4.");
+    const snipeBps = await client.readContract({
+      address: input.curve,
+      abi: PONS_CURVE_ABI,
+      functionName: "currentSnipeTaxBps",
+      args: [account],
+    });
+    const quoted = quotePonsBuy({
+      quoteIn: amountIn,
+      quoteReserve: state.quoteReserve,
+      tokenReserve: state.pricingTokens,
+      sellable: state.sellable,
+      feeBps: state.feeBps,
+      creatorTaxBps: state.creatorTaxBps,
+      snipeBps,
+    });
+    if (quoted.tokensOut <= 0n) throw new Error("That buy does not clear the curve.");
+    const minOut = (quoted.tokensOut * (10_000n - slip)) / 10_000n;
+    input.onStatus(snipeBps > 0n ? `Confirm the buy. The Pons opening snipe tax is ${Number(snipeBps) / 100}% right now.` : "Confirm the buy.");
+    const bought = await send(
+      () =>
+        writeRobinhood(wallet, account, client, {
+          address: input.curve,
+          abi: PONS_CURVE_ABI,
+          functionName: "buy",
+          args: [amountIn, minOut, account],
+          value: amountIn,
+        }),
+      client,
+    );
+    return bought.transactionHash;
+  }
+  if (state.ready) throw new Error("Sells are closed while this token graduates to Uniswap v4.");
+  const quoteOut = quotePonsSell({
+    tokensIn: amountIn,
+    quoteReserve: state.quoteReserve,
+    tokenReserve: state.pricingTokens,
+    feeBps: state.feeBps,
+    creatorTaxBps: state.creatorTaxBps,
+  });
+  if (quoteOut <= 0n) throw new Error("The curve cannot buy that many tokens back.");
+  const minOut = (quoteOut * (10_000n - slip)) / 10_000n;
+  const allowance = await client.readContract({
+    address: input.token,
+    abi: erc20Abi,
+    functionName: "allowance",
+    args: [account, input.curve],
+  });
+  if (allowance < amountIn) {
+    input.onStatus("Confirm the token approval, then the sell.");
+    await send(
+      () =>
+        writeRobinhood(wallet, account, client, {
+          address: input.token,
+          abi: erc20Abi,
+          functionName: "approve",
+          args: [input.curve, amountIn],
+        }),
+      client,
+    );
+  }
+  input.onStatus("Confirm the sell.");
+  const sold = await send(
+    () =>
+      writeRobinhood(wallet, account, client, {
+        address: input.curve,
+        abi: PONS_CURVE_ABI,
+        functionName: "sell",
+        args: [amountIn, minOut, account],
+      }),
+    client,
+  );
+  return sold.transactionHash;
+}
+
+export async function tradeOnCurve(input: {
+  curve: Address;
+  token: Address;
+  side: "buy" | "sell";
+  amount: string;
+  slippageBps: number;
+  onStatus: (message: string) => void;
+}): Promise<Hex> {
+  if (await isPonsCurve(input.curve)) return tradeOnPons(input);
   const { wallet, account, client } = await signer();
   const amountIn = parseEther(input.amount);
   const state = await readCurveState(input.curve);
@@ -626,9 +871,10 @@ export async function readCurveTrades(curve: Address): Promise<ChainTrade[]> {
     logs.push(...(await client.getLogs({ address: curve, fromBlock: from, toBlock: to })));
   }
   const rows: ChainTrade[] = [];
+  const abi = (await isPonsCurve(curve)) ? PONS_CURVE_ABI : FEEZE_CURVE_ABI;
   for (const log of logs) {
     try {
-      const decoded = decodeEventLog({ abi: FEEZE_CURVE_ABI, data: log.data, topics: log.topics });
+      const decoded = decodeEventLog({ abi, data: log.data, topics: log.topics });
       if (decoded.eventName !== "CurveBuy" && decoded.eventName !== "CurveSell") continue;
       const buy = decoded.eventName === "CurveBuy";
       const tokenAmount = Number(formatEther(buy ? decoded.args.tokensOut : decoded.args.tokensIn));

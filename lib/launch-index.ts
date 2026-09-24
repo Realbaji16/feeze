@@ -30,7 +30,7 @@ function xmlValue(text: string): string {
   return value;
 }
 
-async function getValue(key: string): Promise<string | null> {
+export async function getValue(key: string): Promise<string | null> {
   const response = await fetch(`https://keyvalue.immanuel.co/api/KeyVal/GetValue/${APP_KEY}/${encodeURIComponent(key)}`, {
     cache: "no-store",
   });
@@ -40,7 +40,7 @@ async function getValue(key: string): Promise<string | null> {
   return value;
 }
 
-async function setValue(key: string, value: string): Promise<void> {
+export async function setValue(key: string, value: string): Promise<void> {
   const response = await fetch(
     `https://keyvalue.immanuel.co/api/KeyVal/UpdateValue/${APP_KEY}/${encodeURIComponent(key)}/${encodeURIComponent(value)}`,
     { method: "POST", cache: "no-store" },

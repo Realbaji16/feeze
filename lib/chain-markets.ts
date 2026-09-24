@@ -3,6 +3,7 @@ import { robinhood } from "./chain";
 import { loadLaunchIndex, saveLaunchIndex, type LaunchRow } from "./launch-index";
 import { emptyState, launch } from "./protocol";
 import { PAIRS } from "./pairs";
+import { readPonsMarkets } from "./pons-registry";
 import type { Market } from "./types";
 
 /** Old launcher. Its pools were priced from the ETH deposit, so market caps are wrong. */
@@ -441,6 +442,12 @@ export async function readChainMarkets(extra: string[] = [], curves: string[] = 
     .filter((item): item is string => item !== null && item !== CANONICAL_CURVE && !RETIRED_LAUNCHERS.has(item));
   const curved = curveFactories.length ? await readCurveMarkets(curveFactories) : [];
   for (const market of curved) {
+    if (seen.has(market.address)) continue;
+    seen.add(market.address);
+    markets.push(market);
+  }
+  const pons = await readPonsMarkets().catch(() => []);
+  for (const market of pons) {
     if (seen.has(market.address)) continue;
     seen.add(market.address);
     markets.push(market);

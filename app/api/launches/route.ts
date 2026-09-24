@@ -1,10 +1,23 @@
 import { NextResponse } from "next/server";
 import { CANONICAL_LAUNCHER, discoverLaunchers, readChainMarkets } from "@/lib/chain-markets";
+import { probePons, registerPonsLaunch } from "@/lib/pons-registry";
 import { readTokenImage } from "@/lib/token-image";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 export const fetchCache = "force-no-store";
+
+export async function POST(request: Request) {
+  const headers = { "cache-control": "no-store" };
+  try {
+    const body = (await request.json()) as { token?: unknown; tx?: unknown };
+    await registerPonsLaunch(String(body.token ?? ""), String(body.tx ?? ""));
+    return NextResponse.json({ ok: true }, { headers });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "register failed";
+    return NextResponse.json({ error: message }, { status: 400, headers });
+  }
+}
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -15,6 +28,14 @@ export async function GET(request: Request) {
       return NextResponse.json(found, { headers: { "cache-control": "no-store" } });
     } catch (error) {
       const message = error instanceof Error ? error.message : "discover failed";
+      return NextResponse.json({ error: message }, { headers: { "cache-control": "no-store" } });
+    }
+  }
+  if (url.searchParams.get("pons") === "1") {
+    try {
+      return NextResponse.json(await probePons(url.searchParams.get("curve") ?? ""), { headers: { "cache-control": "no-store" } });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "pons probe failed";
       return NextResponse.json({ error: message }, { headers: { "cache-control": "no-store" } });
     }
   }

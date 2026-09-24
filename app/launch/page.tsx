@@ -7,11 +7,11 @@ import { useYeeld } from "@/lib/store";
 import { PAIRS } from "@/lib/pairs";
 import { PairLogo } from "@/components/pair-logo";
 import { ipfsImagePath } from "@/lib/ipfs-path";
-import { bindTokenImage, uploadImageBlob } from "@/lib/share-image";
+import { uploadImageBlob } from "@/lib/share-image";
 import { compact, usd } from "@/lib/format";
-import { launch, PONS_PHANTOM_ETH, START_MARKET_CAP_USD } from "@/lib/protocol";
+import { GRADUATION_MARKET_CAP_USD, launch, PONS_GRADUATION_ETH, START_MARKET_CAP_USD } from "@/lib/protocol";
 import { robinhood } from "@/lib/chain";
-import { deployRobinhoodToken, explainTx, isWethPair } from "@/lib/robinhood-market";
+import { explainTx, isWethPair, launchOnPons } from "@/lib/robinhood-market";
 
 export default function LaunchPage() {
   const { state, commit } = useYeeld();
@@ -24,8 +24,7 @@ export default function LaunchPage() {
   const [twitter, setTwitter] = useState("");
   const [pair, setPair] = useState(PAIRS[0].address);
   const [tax, setTax] = useState(0);
-  const [toLockers, setToLockers] = useState(false);
-  const [liquidity, setLiquidity] = useState("0.01");
+  const [initialBuy, setInitialBuy] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [ethBalance, setEthBalance] = useState<number | null>(null);
@@ -124,9 +123,9 @@ export default function LaunchPage() {
       setStatus("Launches pair with ETH. Pick ETH as the pair.");
       return;
     }
-    const liquidityEth = liquidity.trim();
-    if (!liquidityEth || !(Number(liquidityEth) > 0)) {
-      setStatus("Add ETH liquidity so Uniswap, DexScreener, and trading bots can buy the token right away.");
+    const buyEth = initialBuy.trim();
+    if (buyEth && !(Number(buyEth) >= 0)) {
+      setStatus("Enter the initial buy in ETH, or leave it empty.");
       return;
     }
     setBusy(true);
@@ -141,15 +140,29 @@ export default function LaunchPage() {
         setStatus("The image did not finish uploading to ipfs.");
         return;
       }
-      const deployed = await deployRobinhoodToken({
+      const deployed = await launchOnPons({
         name: cleanName,
         symbol: cleanSymbol,
-        liquidityEth,
+        logo: cid ? `ipfs://${cid}` : "",
+        description: description.trim(),
+        website: website.trim(),
+        twitter: twitter.trim(),
+        creatorTaxBps: tax * 10,
+        initialBuyEth: buyEth,
+        slippageBps: 500,
         onStatus: setStatus,
       });
-      if (!deployed.pool) {
-        setStatus("The Uniswap pool did not open. Add ETH liquidity and try again.");
-        return;
+      setStatus("Listing it on Feeze…");
+      let listed = false;
+      for (let attempt = 0; attempt < 4 && !listed; attempt += 1) {
+        if (attempt) await new Promise((resolve) => setTimeout(resolve, 2_000));
+        listed = await fetch("/api/launches", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token: deployed.token, tx: deployed.tx }),
+        })
+          .then((response) => response.ok)
+          .catch(() => false);
       }
       const result = commit(
         launch(state, {
@@ -161,23 +174,19 @@ export default function LaunchPage() {
           website,
           twitter,
           pair,
-          creatorTaxBps: Math.round(taxPct * 100),
-          taxToLockers: toLockers,
+          creatorTaxBps: tax * 10,
+          taxToLockers: false,
           onchain: true,
           chainAddress: deployed.token,
           chainTx: deployed.tx,
-          poolAddress: deployed.pool,
+          curveAddress: deployed.curve,
         }),
       );
       if (!result.ok) {
-        setStatus(`${result.error} The contract is already live at ${deployed.token}.`);
+        setStatus(`${result.error} The token is already live on Pons at ${deployed.token}.`);
         return;
       }
-      if (cid) {
-        let saved = false;
-        for (let attempt = 0; attempt < 3 && !saved; attempt += 1) saved = await bindTokenImage(result.value.address, cid);
-        if (!saved) setStatus("The token is live. This browser will keep saving the image until every browser can see it.");
-      }
+      if (!listed) setStatus("The token is live on Pons. Explore will list it once the Feeze index catches up.");
       router.push(`/coin/${result.value.address}`);
     } catch (error) {
       setStatus(explainTx(error));
@@ -191,7 +200,7 @@ export default function LaunchPage() {
       <div>
         <h1 className="page-title">Launch a token</h1>
         <p className="sub">
-          Launch deploys the token and locks a Uniswap v3 pool in one transaction, so DexScreener, BasedBot, and other traders can buy it immediately. It opens at {PONS_PHANTOM_ETH} ETH ({usd(START_MARKET_CAP_USD)}). The ETH you attach seeds that pool and is locked forever.
+          Launches go through the Pons v2 factory. The token starts on the Pons bonding curve that trading bots already route, then graduates to a locked Uniswap v4 pool at {PONS_GRADUATION_ETH} ETH raised. Pons is an external protocol.
         </p>
         <div className="stack">
           <div className="launch-identity">
@@ -264,24 +273,20 @@ export default function LaunchPage() {
               )}
             </div>
           </div>
-          <p className="note">Opens a locked Uniswap pool against ETH at launch. Explore lists it on every device.</p>
+          <p className="note">Pairs with native ETH on Pons. Explore lists it on every device.</p>
           <label className="lbl">
-            Pool liquidity (ETH)
-            <input className="field" value={liquidity} inputMode="decimal" placeholder="0.01" onChange={(event) => setLiquidity(event.target.value)} />
+            Initial buy (ETH, optional)
+            <input className="field" value={initialBuy} inputMode="decimal" placeholder="0.05" onChange={(event) => setInitialBuy(event.target.value)} />
           </label>
           <label className="lbl">
             Creator tax {taxPct.toFixed(1)}%
             <input className="range" type="range" min={0} max={100} value={tax} onChange={(event) => setTax(Number(event.target.value))} />
           </label>
-          <label className="check">
-            <input type="checkbox" checked={toLockers} onChange={(event) => setToLockers(event.target.checked)} />
-            Redirect creator tax to lockers
-          </label>
-          <p className="note">Uniswap takes 1% on every swap. Creator tax is recorded on Feeze for this launch.</p>
+          <p className="note">Pons charges 1% on every curve trade. Creator tax is optional, charged on top, and paid to you by Pons.</p>
           <p className="note">
             {ethPair
-              ? "Without ETH in the pool, bots and DexScreener cannot trade the token. Gas is separate from this liquidity."
-              : "Launches pair with ETH. Other quote assets are not live on this launcher yet."}
+              ? "An initial buy is made in the same transaction as the launch, so nobody can buy ahead of you."
+              : "Launches pair with ETH. Other quote assets are not live on Pons from Feeze yet."}
           </p>
           <button className="btn-accent launch-submit" disabled={!wallet || busy} onClick={() => void submit()}>
             {wallet ? (busy ? "Confirm in wallet…" : "Launch Token") : "Connect to launch"}
@@ -295,18 +300,19 @@ export default function LaunchPage() {
           <div className="quote-box">
             <div><span>Chain</span><span>Robinhood 4663</span></div>
             <div><span>Wallet ETH</span><span className="mono">{ethBalance == null ? "—" : compact(ethBalance, 4)}</span></div>
-            <div><span>Pool</span><span>Locked Uniswap v3 at launch</span></div>
-            <div><span>Liquidity</span><span className="mono">{liquidity.trim() || "—"} ETH</span></div>
+            <div><span>Contract</span><span>Pons v2 factory</span></div>
+            <div><span>Launch fee</span><span className="mono">0.0005 ETH</span></div>
+            <div><span>Initial buy</span><span className="mono">{initialBuy.trim() || "0"} ETH</span></div>
             <div><span>Quote</span><span>{selected.symbol}</span></div>
           </div>
           <p className="note" style={{ marginTop: 12 }}>
-            One confirmation deploys the token and locks the pool. Explore on every device reads the shared launcher.
+            One confirmation deploys the token on Pons. Feeze then lists it so Explore shows it on every device.
           </p>
         </div>
         <div className="card">
           <h3>On-chain launch</h3>
           <p className="note">
-            80% of the 1,000,000,000 supply goes into the locked Uniswap pool with your ETH. You receive the remaining 20%. Opening market cap is set to about {usd(START_MARKET_CAP_USD)} from the 1.68 ETH phantom price, not from how much liquidity you deposit.
+            The full 1,000,000,000 supply starts on the Pons curve at about {usd(START_MARKET_CAP_USD)}. Once {PONS_GRADUATION_ETH} ETH is raised, around {usd(GRADUATION_MARKET_CAP_USD)}, Pons moves it into a Uniswap v4 pool with liquidity locked forever.
           </p>
         </div>
       </div>

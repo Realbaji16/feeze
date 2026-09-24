@@ -243,6 +243,7 @@ export default function CoinPage() {
       const hash = market.curveAddress && !market.poolAddress
         ? await tradeOnCurve({
             curve: market.curveAddress as Address,
+            token: market.address as Address,
             side,
             amount,
             slippageBps: slippage,
