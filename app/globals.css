@@ -110,7 +110,7 @@ img { max-width: 100%; display: block; }
 .top-spacer { flex: 1; }
 .search-btn, .btn, .btn-accent, .btn-ghost {
   border-radius: 999px; border: 1px solid var(--line-strong); background: var(--bg-2);
-  padding: 8px 12px; display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 12px; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
 }
 .search-btn { color: var(--muted); min-width: 180px; }
 .search-btn kbd, kbd {
