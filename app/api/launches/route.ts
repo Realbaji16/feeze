@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { CANONICAL_LAUNCHER, discoverLaunchers, readChainMarkets } from "@/lib/chain-markets";
-import { probePons, registerPonsLaunch } from "@/lib/pons-registry";
+import { CANONICAL_LAUNCHER, discoverLaunchers } from "@/lib/chain-markets";
+import { probePons, readPonsMarkets, registerPonsLaunch } from "@/lib/pons-registry";
 import { readTokenImage } from "@/lib/token-image";
 
 export const dynamic = "force-dynamic";
@@ -21,7 +21,6 @@ export async function POST(request: Request) {
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
-  const extra = url.searchParams.get("launchers") ?? "";
   if (url.searchParams.get("discover") === "1") {
     try {
       const found = await discoverLaunchers();
@@ -60,11 +59,7 @@ export async function GET(request: Request) {
     );
   }
   try {
-    const curves = url.searchParams.get("curves") ?? "";
-    const markets = await readChainMarkets(
-      extra.split(",").filter(Boolean),
-      curves.split(",").filter(Boolean),
-    );
+    const markets = await readPonsMarkets();
     const withImages = await Promise.all(
       markets.map(async (market) => {
         if (market.image) return market;

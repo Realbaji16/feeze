@@ -1,7 +1,6 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { readChainMarkets } from "./chain-markets";
 import { PAIRS } from "./pairs";
 import { cidFromImage } from "./ipfs-path";
 import { readSharedImage, shareTokenImage } from "./share-image";
@@ -31,7 +30,24 @@ const PAIR_ASSETS = new Set(PAIRS.map((pair) => pair.address));
 const RETIRED_MARKETS = new Set([
   "0xcaba674193e2784008e770ce6009334c6afd85a3",
   "0xd10363c3e12538d4042134364b194d1e6f1d7619",
+  "0xddaeb77ed6c3b24bf548b9c09a2eb5cd54b0b93d",
+  "0x28ca4d5a91612a632fc1ca4bd96883648d91a1d5",
+  "0xc4d66ce2514ac215781f90762e56ce9e9f631fe9",
+  "0x9eda9a5460e80a6c2ae7804a13e8119654088b89",
+  "0x46f25cacbd10588459812ac06960b1c086f2298c",
+  "0xfe1b374b37c6bbfc4dfcb1542838d006c8cf151b",
 ]);
+
+/** Explore lists only Pons launches the server knows about. Anything else saved in this browser is dropped. */
+function keepListed(state: ProtocolState, listed: Market[]): ProtocolState {
+  const keep = new Set(listed.map((market) => market.address));
+  const fresh = Date.now() - 180_000;
+  const markets = state.markets.filter(
+    (market) => keep.has(market.address) || (market.curveAddress && market.launchedAt > fresh && !RETIRED_MARKETS.has(market.address)),
+  );
+  if (markets.length === state.markets.length) return state;
+  return { ...state, markets };
+}
 
 /** Demo coins live only in the simulator. A tradeable launch has a Robinhood pool. */
 function keepTradeable(state: ProtocolState): ProtocolState {
@@ -170,23 +186,15 @@ export function YeeldProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!ready) return;
     let stop = false;
-    const apply = (markets: Market[]) => {
-      if (stop || !markets.length) return;
-      setState((current) => mergeChainMarkets(current, markets));
-    };
     const load = () => {
       fetch("/api/launches", { cache: "no-store" })
-        .then((response) => (response.ok ? response.json() : []))
-        .then((markets: Market[]) => {
-          if (Array.isArray(markets) && markets.length) {
-            apply(markets);
-            return;
-          }
-          return readChainMarkets().then(apply);
+        .then(async (response) => {
+          if (!response.ok || response.headers.get("x-feeze-error")) return;
+          const markets = (await response.json()) as Market[];
+          if (stop || !Array.isArray(markets)) return;
+          setState((current) => keepListed(mergeChainMarkets(current, markets), markets));
         })
-        .catch(() => {
-          readChainMarkets().then(apply).catch(() => undefined);
-        });
+        .catch(() => undefined);
     };
     load();
     const id = window.setInterval(load, 15_000);
