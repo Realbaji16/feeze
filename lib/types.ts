@@ -61,6 +61,10 @@ export interface Market {
   poolAddress?: string;
   /** Bonding curve that holds the supply until graduation. */
   curveAddress?: string;
+  /** Pons curve virtual quote reserve, in the pair asset. Defaults to the ETH curve. */
+  quotePhantom?: number;
+  /** Real quote that graduates the Pons curve, in the pair asset. */
+  quoteThreshold?: number;
 }
 
 export interface LockPosition {

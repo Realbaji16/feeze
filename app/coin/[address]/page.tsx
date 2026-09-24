@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { formatEther, parseEther, zeroAddress, type Address } from "viem";
+import { formatEther, formatUnits, zeroAddress, type Address } from "viem";
 import { useYeeld } from "@/lib/store";
 import { compact, formatDate, shortAddr, timeAgo, usd } from "@/lib/format";
 import {
@@ -23,10 +23,9 @@ import {
 import type { ChainHolder, ChainTrade } from "@/lib/chain-activity";
 import { PhasePill, Progress, TokenMark, marketStats } from "@/components/bits";
 import { dexChartUrl, listedMarket, readDexPool, type DexQuote } from "@/lib/dex";
-import { GRADUATION_MARKET_CAP_USD, PONS_GRADUATION_ETH, PONS_PHANTOM_ETH } from "@/lib/protocol";
+import { PONS_GRADUATION_ETH, PONS_PHANTOM_ETH } from "@/lib/protocol";
+import { getPair } from "@/lib/pairs";
 import { dexScreener, explainTx, quoteSwap, readCurveState, readCurveTrades, readHoldings, readUniswapPool, swapOnRobinhood, tokenExplorer, tradeOnCurve, txExplorer } from "@/lib/robinhood-market";
-import { quoteCurveBuy, quoteCurveSell } from "@/lib/curve-math";
-
 export default function CoinPage() {
   const params = useParams<{ address: string }>();
   const { state, commit } = useYeeld();
@@ -55,7 +54,9 @@ export default function CoinPage() {
   useEffect(() => {
     if (!market?.onchain || !wallet) return;
     let stop = false;
-    readHoldings(wallet as Address, market.address as Address)
+    const pair = getPair(market.pair);
+    const quote = pair && pair.symbol !== "ETH" ? { address: pair.address as Address, decimals: pair.decimals } : undefined;
+    readHoldings(wallet as Address, market.address as Address, quote)
       .then((holdings) => {
         if (!stop) setChainBal(holdings);
       })
@@ -65,7 +66,7 @@ export default function CoinPage() {
     return () => {
       stop = true;
     };
-  }, [market?.onchain, wallet, market?.address, chainBusy]);
+  }, [market?.onchain, wallet, market?.address, market?.pair, chainBusy]);
 
   useEffect(() => {
     if (!market?.onchain || !(numeric > 0)) {
@@ -73,19 +74,15 @@ export default function CoinPage() {
       return;
     }
     if (market.curveAddress && !market.poolAddress) {
-      try {
-        const raw = parseEther(amount);
-        const realQuote = parseEther(market.realQuote.toFixed(18));
-        const tokenReserve = parseEther((market.realTokens || 1_000_000_000).toFixed(18));
-        const tax = BigInt(market.creatorTaxBps);
-        const quoted =
-          side === "buy"
-            ? quoteCurveBuy({ quoteIn: raw, realQuote, tokenReserve, creatorTaxBps: tax })
-            : quoteCurveSell({ tokensIn: raw, realQuote, tokenReserve, creatorTaxBps: tax });
-        const out = "tokensOut" in quoted ? quoted.tokensOut : quoted.quoteOut;
-        setChainOut(formatEther(out));
-      } catch {
-        setChainOut(null);
+      const quoteReserve = (market.quotePhantom ?? PONS_PHANTOM_ETH) + market.realQuote;
+      const tokenReserve = market.realTokens || 1_000_000_000;
+      const cut = (100 + market.creatorTaxBps) / 10_000;
+      if (side === "buy") {
+        const net = numeric * (1 - cut);
+        setChainOut(String((net * tokenReserve) / (quoteReserve + net)));
+      } else {
+        const gross = (numeric * quoteReserve) / (tokenReserve + numeric);
+        setChainOut(String(gross * (1 - cut)));
       }
       return;
     }
@@ -104,7 +101,7 @@ export default function CoinPage() {
     return () => {
       stop = true;
     };
-  }, [market?.onchain, market?.poolAddress, market?.curveAddress, market?.address, market?.realQuote, market?.realTokens, market?.creatorTaxBps, side, amount, numeric]);
+  }, [market?.onchain, market?.poolAddress, market?.curveAddress, market?.address, market?.realQuote, market?.realTokens, market?.creatorTaxBps, market?.quotePhantom, side, amount, numeric]);
 
   const stateRef = useRef(state);
   const commitRef = useRef(commit);
@@ -153,7 +150,7 @@ export default function CoinPage() {
       readCurveState(market.curveAddress as Address)
         .then((chain) => {
           if (stop) return;
-          const realQuote = Number(formatEther(chain.realQuote));
+          const realQuote = Number(formatUnits(chain.realQuote, chain.quoteDecimals));
           const realTokens = Number(formatEther(chain.tokenReserve));
           const pool = chain.graduated && chain.pool !== zeroAddress ? chain.pool : null;
           const current = stateRef.current.markets.find((item) => item.address === market.address);
@@ -226,6 +223,9 @@ export default function CoinPage() {
     statsProgress: stats.progress,
     curve: Boolean(market.curveAddress && !market.poolAddress),
   });
+  const phantom = market.quotePhantom ?? PONS_PHANTOM_ETH;
+  const threshold = market.quoteThreshold ?? PONS_GRADUATION_ETH;
+  const graduationCapUsd = ((phantom + threshold) ** 2 / phantom) * stats.pair.usd;
   const candles = buildCandles(market.trades);
   const simHolders = holdersOf(state, market.address);
   const trades = onchain ? chainTrades : market.trades;
@@ -302,7 +302,7 @@ export default function CoinPage() {
                 {listed.graduated
                   ? "Graduated"
                   : onchain && (market.poolAddress || market.curveAddress)
-                    ? `${Math.round(listed.progress * 100)}% to ${PONS_GRADUATION_ETH} ETH · ${usd(GRADUATION_MARKET_CAP_USD)}`
+                    ? `${Math.round(listed.progress * 100)}% to ${compact(threshold, 2)} ${stats.pair.symbol} · ${usd(graduationCapUsd)}`
                     : onchain
                       ? "No pool yet"
                       : `${Math.round(listed.progress * 100)}% to target`}
@@ -312,7 +312,7 @@ export default function CoinPage() {
             {market.poolAddress ? (
               <iframe className="dex-frame" title={`${market.symbol} chart`} src={dexChartUrl(market.poolAddress)} />
             ) : market.curveAddress && stats ? (
-              <PriceChart points={curvePoints(market.launchedAt, stats.price, chainTrades)} />
+              <PriceChart points={curvePoints(market.launchedAt, phantom / 1_000_000_000, stats.price, chainTrades)} />
             ) : onchain ? (
               <div className="chart note">This launch did not open a curve or a pool.</div>
             ) : (
@@ -411,7 +411,7 @@ export default function CoinPage() {
               <input className="field" value={amount} onChange={(event) => setAmount(event.target.value)} />
             </label>
             <div className="amounts">
-              {(side === "buy" ? [0.05, 0.1, 1, 5] : []).map((preset) => (
+              {(side === "buy" ? (stats.pair.usd < 100 ? [10, 50, 100, 500] : [0.05, 0.1, 1, 5]) : []).map((preset) => (
                 <button key={preset} onClick={() => setAmount(String(preset))}>{preset}</button>
               ))}
               <button onClick={() => setAmount(String(balance))}>MAX</button>
@@ -424,9 +424,9 @@ export default function CoinPage() {
             <div className="quote-box">
               {onchain ? (
                 <>
-                  <div><span>You receive</span><b className="mono">{chainOut ? `${compact(Number(chainOut), 4)} ${side === "buy" ? market.symbol : "ETH"}` : "—"}</b></div>
-                  <div><span>Fee</span><span>{market.curveAddress && !market.poolAddress ? "1% plus creator tax, paid in ETH" : "Uniswap 1%"}</span></div>
-                  {market.curveAddress && !market.poolAddress && <div className="note">Trades go to the bonding curve. The Uniswap pool opens once 4.2 ETH has been raised.</div>}
+                  <div><span>You receive</span><b className="mono">{chainOut ? `${compact(Number(chainOut), 4)} ${side === "buy" ? market.symbol : stats.pair.symbol}` : "—"}</b></div>
+                  <div><span>Fee</span><span>{market.curveAddress && !market.poolAddress ? `1% plus creator tax, paid in ${stats.pair.symbol}` : "Uniswap 1%"}</span></div>
+                  {market.curveAddress && !market.poolAddress && <div className="note">Trades go to the Pons bonding curve. The Uniswap v4 pool opens once {compact(threshold, 2)} {stats.pair.symbol} has been raised.</div>}
                   {!market.poolAddress && !market.curveAddress && <div className="note">No Uniswap pool yet, so this token is not listed on DexScreener.</div>}
                   {chainNote && <div className="note">{chainNote}</div>}
                 </>
@@ -456,7 +456,7 @@ export default function CoinPage() {
             <h3>Fee split</h3>
             <p className="note">
               {market.onchain
-                ? "This market trades on Uniswap v3. The 1% pool fee is Uniswap’s. The creator-tax slider is not collected on these swaps."
+                ? `This market trades on the Pons curve. Pons charges 1% on every trade, plus a ${market.creatorTaxBps / 100}% creator tax paid to the creator.`
                 : `1% base on the quote leg. Creator tax ${market.creatorTaxBps / 100}% goes to ${market.taxToLockers ? "lockers" : "the creator"}.`}
             </p>
             <div className="split"><i /><i /><i /></div>
@@ -521,8 +521,7 @@ function CopyCa({ address }: { address: string }) {
   );
 }
 
-function curvePoints(launchedAt: number, spot: number, trades: ChainTrade[]) {
-  const open = PONS_PHANTOM_ETH / 1_000_000_000;
+function curvePoints(launchedAt: number, open: number, spot: number, trades: ChainTrade[]) {
   const points = [{ time: launchedAt || Date.now() - 60_000, price: open }];
   for (const row of [...trades].reverse()) {
     if (!row.quoteAmount || !row.tokenAmount) continue;

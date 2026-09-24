@@ -7,10 +7,12 @@ import {
   encodeFunctionData,
   erc20Abi,
   formatEther,
+  formatUnits,
   getAddress,
   http,
   isAddress,
   parseEther,
+  parseUnits,
   zeroAddress,
   type Address,
   type Hex,
@@ -489,7 +491,7 @@ async function readPonsCurve(curve: Address) {
   const client = publicClient();
   const read = <T,>(functionName: string) =>
     client.readContract({ address: curve, abi: PONS_CURVE_ABI, functionName } as never) as Promise<T>;
-  const [reserves, realQuote, tokenReserve, sellable, feeBps, creatorTaxBps, graduated, ready] = await Promise.all([
+  const [reserves, realQuote, tokenReserve, sellable, feeBps, creatorTaxBps, graduated, ready, native, pairToken] = await Promise.all([
     read<readonly [bigint, bigint]>("getReserves"),
     read<bigint>("realQuoteReserve"),
     read<bigint>("tokenReserve"),
@@ -498,17 +500,47 @@ async function readPonsCurve(curve: Address) {
     read<bigint>("creatorTaxBps"),
     read<boolean>("graduated"),
     read<boolean>("readyToGraduate"),
+    read<boolean>("isNativeQuote"),
+    read<Address>("pairToken"),
   ]);
-  return { quoteReserve: reserves[0], pricingTokens: reserves[1], realQuote, tokenReserve, sellable, feeBps, creatorTaxBps, graduated, ready };
+  const decimals = native ? 18 : await quoteDecimals(pairToken);
+  return {
+    quoteReserve: reserves[0],
+    pricingTokens: reserves[1],
+    realQuote,
+    tokenReserve,
+    sellable,
+    feeBps,
+    creatorTaxBps,
+    graduated,
+    ready,
+    native,
+    pairToken,
+    decimals,
+  };
 }
 
-export async function readHoldings(account: Address, token: Address) {
+const decimalsCache = new Map<string, number>();
+
+async function quoteDecimals(token: Address): Promise<number> {
+  const key = token.toLowerCase();
+  const known = decimalsCache.get(key);
+  if (known !== undefined) return known;
+  const decimals = await publicClient().readContract({ address: token, abi: erc20Abi, functionName: "decimals" });
+  decimalsCache.set(key, decimals);
+  return decimals;
+}
+
+/** Wallet balances for a market. `eth` is the pay asset: native ETH, or the ERC-20 pair when one is given. */
+export async function readHoldings(account: Address, token: Address, quote?: { address: Address; decimals: number }) {
   const client = publicClient();
-  const [eth, raw] = await Promise.all([
-    client.getBalance({ address: account }),
+  const [pay, raw] = await Promise.all([
+    quote
+      ? client.readContract({ address: quote.address, abi: erc20Abi, functionName: "balanceOf", args: [account] })
+      : client.getBalance({ address: account }),
     client.readContract({ address: token, abi: erc20Abi, functionName: "balanceOf", args: [account] }),
   ]);
-  return { eth: Number(formatEther(eth)), token: Number(formatEther(raw)) };
+  return { eth: Number(formatUnits(pay, quote?.decimals ?? 18)), token: Number(formatEther(raw)) };
 }
 
 export async function quoteSwap(input: { token: Address; side: "buy" | "sell"; amount: string }) {
@@ -670,6 +702,7 @@ export async function readCurveState(curve: Address): Promise<{
   graduated: boolean;
   creatorTaxBps: bigint;
   token: Address;
+  quoteDecimals: number;
 }> {
   if (await isPonsCurve(curve)) {
     const pons = await readPonsCurve(curve);
@@ -680,6 +713,7 @@ export async function readCurveState(curve: Address): Promise<{
       graduated: pons.graduated,
       creatorTaxBps: pons.creatorTaxBps,
       token: zeroAddress,
+      quoteDecimals: pons.decimals,
     };
   }
   const client = publicClient();
@@ -691,7 +725,7 @@ export async function readCurveState(curve: Address): Promise<{
     client.readContract({ address: curve, abi: FEEZE_CURVE_ABI, functionName: "creatorTaxBps" }),
     client.readContract({ address: curve, abi: FEEZE_CURVE_ABI, functionName: "token" }),
   ]);
-  return { realQuote, tokenReserve, pool, graduated, creatorTaxBps, token };
+  return { realQuote, tokenReserve, pool, graduated, creatorTaxBps, token, quoteDecimals: 18 };
 }
 
 async function tradeOnPons(input: {
@@ -703,9 +737,9 @@ async function tradeOnPons(input: {
   onStatus: (message: string) => void;
 }): Promise<Hex> {
   const { wallet, account, client } = await signer();
-  const amountIn = parseEther(input.amount);
   const state = await readPonsCurve(input.curve);
   if (state.graduated) throw new Error("This token graduated to Uniswap v4. Trade it on pons.family.");
+  const amountIn = input.side === "buy" ? parseUnits(input.amount, state.decimals) : parseEther(input.amount);
   const slip = BigInt(Math.max(0, Math.min(10_000, input.slippageBps)));
   if (input.side === "buy") {
     if (state.sellable <= 0n) throw new Error("The curve is full and graduating to Uniswap v4.");
@@ -726,6 +760,27 @@ async function tradeOnPons(input: {
     });
     if (quoted.tokensOut <= 0n) throw new Error("That buy does not clear the curve.");
     const minOut = (quoted.tokensOut * (10_000n - slip)) / 10_000n;
+    if (!state.native) {
+      const approved = await client.readContract({
+        address: state.pairToken,
+        abi: erc20Abi,
+        functionName: "allowance",
+        args: [account, input.curve],
+      });
+      if (approved < amountIn) {
+        input.onStatus("Confirm the approval to spend your pay token, then the buy.");
+        await send(
+          () =>
+            writeRobinhood(wallet, account, client, {
+              address: state.pairToken,
+              abi: erc20Abi,
+              functionName: "approve",
+              args: [input.curve, amountIn],
+            }),
+          client,
+        );
+      }
+    }
     input.onStatus(snipeBps > 0n ? `Confirm the buy. The Pons opening snipe tax is ${Number(snipeBps) / 100}% right now.` : "Confirm the buy.");
     const bought = await send(
       () =>
@@ -734,7 +789,7 @@ async function tradeOnPons(input: {
           abi: PONS_CURVE_ABI,
           functionName: "buy",
           args: [amountIn, minOut, account],
-          value: amountIn,
+          value: state.native ? amountIn : undefined,
         }),
       client,
     );
@@ -871,14 +926,16 @@ export async function readCurveTrades(curve: Address): Promise<ChainTrade[]> {
     logs.push(...(await client.getLogs({ address: curve, fromBlock: from, toBlock: to })));
   }
   const rows: ChainTrade[] = [];
-  const abi = (await isPonsCurve(curve)) ? PONS_CURVE_ABI : FEEZE_CURVE_ABI;
+  const pons = await isPonsCurve(curve);
+  const abi = pons ? PONS_CURVE_ABI : FEEZE_CURVE_ABI;
+  const decimals = pons ? (await readPonsCurve(curve)).decimals : 18;
   for (const log of logs) {
     try {
       const decoded = decodeEventLog({ abi, data: log.data, topics: log.topics });
       if (decoded.eventName !== "CurveBuy" && decoded.eventName !== "CurveSell") continue;
       const buy = decoded.eventName === "CurveBuy";
       const tokenAmount = Number(formatEther(buy ? decoded.args.tokensOut : decoded.args.tokensIn));
-      const quoteAmount = Number(formatEther(buy ? decoded.args.quoteIn : decoded.args.quoteOut));
+      const quoteAmount = Number(formatUnits(buy ? decoded.args.quoteIn : decoded.args.quoteOut, decimals));
       rows.push({
         hash: log.transactionHash ?? "",
         side: buy ? "buy" : "sell",

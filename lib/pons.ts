@@ -39,6 +39,9 @@ export const PONS_CURVE_ABI = parseAbi([
   "function currentSnipeTaxBps(address recipient) view returns (uint256)",
   "function readyToGraduate() view returns (bool)",
   "function graduated() view returns (bool)",
+  "function graduationThreshold() view returns (uint256)",
+  "function isNativeQuote() view returns (bool)",
+  "function pairToken() view returns (address)",
   "event CurveBuy(address indexed buyer, address indexed recipient, uint256 quoteIn, uint256 tokensOut, uint256 fee, uint256 tax)",
   "event CurveSell(address indexed seller, address indexed recipient, uint256 tokensIn, uint256 quoteOut, uint256 fee, uint256 tax)",
 ]);

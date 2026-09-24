@@ -39,13 +39,13 @@ export function marketStats(market: Market) {
   const pair = getPair(market.pair);
   if (!pair) return null;
   if (market.onchain && market.curveAddress && !market.poolAddress && market.realTokens > 0) {
-    const price = (PONS_PHANTOM_ETH + market.realQuote) / market.realTokens;
+    const price = ((market.quotePhantom ?? PONS_PHANTOM_ETH) + market.realQuote) / market.realTokens;
     const mcap = price * TOTAL_SUPPLY * pair.usd;
     return {
       pair,
       price,
       mcap,
-      progress: Math.min(1, market.realQuote / PONS_GRADUATION_ETH),
+      progress: Math.min(1, market.realQuote / (market.quoteThreshold ?? PONS_GRADUATION_ETH)),
       fdvQuote: price * TOTAL_SUPPLY,
     };
   }

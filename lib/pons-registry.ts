@@ -1,4 +1,4 @@
-import { createPublicClient, erc20Abi, formatEther, http, parseAbi, type Address } from "viem";
+import { createPublicClient, erc20Abi, formatEther, formatUnits, http, parseAbi, type Address } from "viem";
 import { robinhood } from "./chain";
 import { cidFromImage, ipfsImagePath } from "./ipfs-path";
 import { getValue, setValue } from "./launch-index";
@@ -11,6 +11,12 @@ import type { Market } from "./types";
 const COUNT_KEY = "feezepn";
 const MAX_LAUNCHES = 400;
 const ETH_PAIR = PAIRS.find((pair) => pair.symbol === "ETH")!.address;
+/** The FEEZE token. Always listed and marked as the protocol token. */
+const OFFICIAL: Entry = {
+  token: "0x106c20f8f3ec2fa3e2346f31e59cb8eb22fc8b26",
+  time: Date.parse("2026-09-24T15:45:08Z"),
+  tx: "0xe1db08718d7155004b56e2660c61f17e950ba08d79aedbf7c78ae3f253ded173",
+};
 
 const TOKEN_INFO_ABI = parseAbi([
   "struct Socials { string twitter; string telegram; string discord; string website; string farcaster; }",
@@ -27,6 +33,9 @@ interface Static {
   curve: string;
   creator: string;
   creatorTaxBps: number;
+  pair: string;
+  decimals: number;
+  threshold: number;
   name: string;
   symbol: string;
   description: string;
@@ -46,14 +55,15 @@ async function readEntries(): Promise<Entry[]> {
   const now = Date.now();
   if (listCache && now - listCache.at < 8_000) return listCache.entries;
   const count = Math.min(MAX_LAUNCHES, Number((await getValue(COUNT_KEY)) || "0") || 0);
-  const rows = await Promise.all(
+  const rows: (Entry | null)[] = [OFFICIAL];
+  rows.push(...await Promise.all(
     Array.from({ length: count }, async (_, index) => {
       const [head, tx] = await Promise.all([getValue(`feezep${index}`), getValue(`feezept${index}`)]);
       const [token, time] = (head ?? "").split("~");
       if (!token || !/^[0-9a-f]{40}$/.test(token)) return null;
       return { token: `0x${token}`, time: Number(time) || 0, tx: tx && /^[0-9a-f]{64}$/.test(tx) ? `0x${tx}` : "" };
     }),
-  );
+  ));
   const seen = new Set<string>();
   const entries = rows.filter((row): row is Entry => {
     if (!row || seen.has(row.token)) return false;
@@ -81,6 +91,9 @@ async function readStatic(token: string): Promise<Static | null> {
   const address = token as Address;
   const record = await launchRecord(address);
   if (!record) return null;
+  const native = record.pairToken === "0x0000000000000000000000000000000000000000";
+  const pair = native ? PAIRS.find((item) => item.address === ETH_PAIR) : PAIRS.find((item) => item.address === record.pairToken.toLowerCase());
+  if (!pair) return null;
   const [name, symbol, info] = await Promise.all([
     client.readContract({ address, abi: erc20Abi, functionName: "name" }),
     client.readContract({ address, abi: erc20Abi, functionName: "symbol" }),
@@ -91,6 +104,9 @@ async function readStatic(token: string): Promise<Static | null> {
     curve: record.curve.toLowerCase(),
     creator: record.creatorFeeRecipient.toLowerCase(),
     creatorTaxBps: Number(record.creatorTaxBps),
+    pair: pair.address,
+    decimals: pair.decimals,
+    threshold: Number(formatUnits(record.graduationThreshold, pair.decimals)),
     name,
     symbol,
     description: info?.[2] ?? "",
@@ -102,7 +118,10 @@ async function readStatic(token: string): Promise<Static | null> {
   return found;
 }
 
-async function readReserves(curve: Address): Promise<{ realQuote: number; tokens: number; graduated: boolean } | null> {
+async function readReserves(
+  curve: Address,
+  decimals = 18,
+): Promise<{ realQuote: number; phantom: number; tokens: number; graduated: boolean } | null> {
   const client = rpc();
   try {
     const [reserves, realQuote, graduated] = await Promise.all([
@@ -110,7 +129,12 @@ async function readReserves(curve: Address): Promise<{ realQuote: number; tokens
       client.readContract({ address: curve, abi: PONS_CURVE_ABI, functionName: "realQuoteReserve" }),
       client.readContract({ address: curve, abi: PONS_CURVE_ABI, functionName: "graduated" }),
     ]);
-    return { realQuote: Number(formatEther(realQuote)), tokens: Number(formatEther(reserves[1])), graduated };
+    return {
+      realQuote: Number(formatUnits(realQuote, decimals)),
+      phantom: Number(formatUnits(reserves[0] > realQuote ? reserves[0] - realQuote : 0n, decimals)),
+      tokens: Number(formatEther(reserves[1])),
+      graduated,
+    };
   } catch {
     return null;
   }
@@ -183,7 +207,7 @@ export async function readPonsMarkets(): Promise<Market[]> {
     entries.map(async (entry) => {
       const meta = await readStatic(entry.token).catch(() => null);
       if (!meta) return null;
-      const reserves = await readReserves(meta.curve as Address);
+      const reserves = await readReserves(meta.curve as Address, meta.decimals);
       const draft = emptyState();
       draft.now = entry.time || Date.now();
       const created = launch(draft, {
@@ -194,7 +218,7 @@ export async function readPonsMarkets(): Promise<Market[]> {
         image: meta.image,
         website: meta.website,
         twitter: meta.twitter,
-        pair: ETH_PAIR,
+        pair: meta.pair,
         creatorTaxBps: Math.min(1000, meta.creatorTaxBps),
         taxToLockers: false,
         onchain: true,
@@ -204,7 +228,12 @@ export async function readPonsMarkets(): Promise<Market[]> {
         curveTokens: reserves && reserves.tokens > 0 ? reserves.tokens : undefined,
         curveQuote: reserves?.realQuote ?? 0,
       });
-      return created.ok ? created.value : null;
+      if (!created.ok) return null;
+      const market = created.value;
+      if (reserves && reserves.phantom > 0) market.quotePhantom = reserves.phantom;
+      if (meta.threshold > 0) market.quoteThreshold = meta.threshold;
+      if (entry.token === OFFICIAL.token) market.isProtocol = true;
+      return market;
     }),
   );
   return markets.filter((market): market is Market => market !== null);

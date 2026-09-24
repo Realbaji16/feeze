@@ -103,6 +103,18 @@ function mergeChainMarkets(state: ProtocolState, incoming: Market[]): ProtocolSt
         next.curveAddress = market.curveAddress;
         changed = true;
       }
+      if (
+        existing.pair !== market.pair ||
+        existing.quotePhantom !== market.quotePhantom ||
+        existing.quoteThreshold !== market.quoteThreshold ||
+        existing.isProtocol !== market.isProtocol
+      ) {
+        next.pair = market.pair;
+        next.quotePhantom = market.quotePhantom;
+        next.quoteThreshold = market.quoteThreshold;
+        next.isProtocol = market.isProtocol;
+        changed = true;
+      }
       if (existing.curveAddress && (existing.realQuote !== market.realQuote || existing.realTokens !== market.realTokens)) {
         next.realQuote = market.realQuote;
         next.realTokens = market.realTokens;
