@@ -554,8 +554,8 @@ function PriceChart({ points }: { points: { time: number; price: number }[] }) {
   return (
     <div className="chart">
       <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
-        <path d={area} fill="rgba(34, 163, 255, 0.14)" />
-        <path d={line} fill="none" stroke="#22A3FF" strokeWidth="2.5" vectorEffect="non-scaling-stroke" />
+        <path d={area} fill="rgba(111, 107, 255, 0.16)" />
+        <path d={line} fill="none" stroke="#6f6bff" strokeWidth="2.5" vectorEffect="non-scaling-stroke" />
       </svg>
     </div>
   );
