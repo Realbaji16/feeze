@@ -100,7 +100,7 @@ export default function MarketsPage() {
   return (
     <>
       <section className="hero-banner">
-        <h1>A launchpad where fees freeze with the holders.</h1>
+        <h1>Launch, Freeze, Get Rewarded</h1>
         <p className="lede">
           Turn trading volume into daily payouts. Lock your tokens to freeze 60% of all trading fees directly into your wallet every 24 hours.
         </p>
