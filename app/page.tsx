@@ -99,17 +99,23 @@ export default function MarketsPage() {
 
   return (
     <>
-      <section className="hero">
-        <div>
-          <h1>A launchpad where fees freeze with the holders.</h1>
-          <p className="lede">
-            Turn trading volume into daily payouts. Lock your tokens to freeze 60% of all trading fees directly into your wallet every 24 hours.
-          </p>
-          <div className="hero-actions">
-            <Link className="btn-accent" href="/launch">Launch token</Link>
-            <Link className="btn" href="/docs">Read the docs</Link>
-          </div>
+      <section className="hero-banner">
+        <h1>A launchpad where fees freeze with the holders.</h1>
+        <p className="lede">
+          Turn trading volume into daily payouts. Lock your tokens to freeze 60% of all trading fees directly into your wallet every 24 hours.
+        </p>
+        <div className="hero-actions">
+          <Link className="hero-primary" href="/launch">
+            <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="11" fill="currentColor" />
+              <path d="M12 7v10M7 12h10" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" />
+            </svg>
+            Launch token
+          </Link>
+          <Link className="hero-secondary" href="/docs">Read the docs</Link>
         </div>
+      </section>
+      <section className="hero-stats">
         <div className="stat-row">
           <div className="stat"><span>Markets</span><b>{state.markets.length}</b></div>
           <div className="stat"><span>Graduated</span><b>{graduatedCount}</b></div>
